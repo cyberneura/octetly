@@ -8,7 +8,9 @@ final class NetworkScanner {
     var isScanning = false
     var status = "Ready to scan"
     var progress: ScanProgress?
-    var selectedDeviceID: Device.ID?
+    var selectedDeviceID: Device.ID? {
+        didSet { reconcileSelectionScan() }
+    }
     /// The interface this Mac would scan from. Re-read rather than cached for the life of the
     /// app, since it changes with Wi-Fi and with a VPN coming up.
     var machine: LocalNetwork? = LocalNetwork.current()
@@ -20,6 +22,13 @@ final class NetworkScanner {
     @ObservationIgnored private var portTasks: [Device.ID: Task<Void, Never>] = [:]
     @ObservationIgnored private var namedCount = 0
     private let vendorDatabase = OUIDatabase.loadBundled()
+
+    init() {
+        // The third input to the selection-scan invariant. Wiring it here rather than in a view
+        // is the point: every path that can change one of the three inputs now reaches the check
+        // on its own, and a view cannot leave one out.
+        settings.onChange = { [weak self] in self?.reconcileSelectionScan() }
+    }
 
     func refreshMachine() {
         machine = LocalNetwork.current()
@@ -87,8 +96,15 @@ final class NetworkScanner {
         status = "Scan stopped"
     }
 
-    /// Runs a port scan for the selected device when the settings ask for one on selection.
-    func portScanSelectionIfNeeded() {
+    /// Restores the invariant "the selected device has had its ports scanned, if the settings ask
+    /// for that".
+    ///
+    /// Its inputs are the selection, the device list and the port scan mode, so it is re-checked
+    /// whenever any of the three moves: from `selectedDeviceID`'s observer, from `publish`, and
+    /// from the settings store's callback. Written as a condition to restore rather than as a
+    /// handler for one event, because every defect found in this area was a state change that
+    /// nobody had thought to hang a handler on.
+    func reconcileSelectionScan() {
         guard settings.settings.portScanMode == .onSelection, let id = selectedDeviceID else { return }
         scanPorts(for: id)
     }
@@ -146,23 +162,12 @@ final class NetworkScanner {
                     existing.latencyMilliseconds = latency
                 }
                 if !existing.hasMACAddress, incoming.hasMACAddress {
-                    let addressKey = existing.annotationKey
                     existing.macAddress = incoming.macAddress
                     existing.vendor = incoming.vendor
-                    // The key is the MAC once there is one, so anything filed under the address
-                    // moves with it — otherwise a name typed before ARP caught up would still be
-                    // stored, just never looked for again.
-                    annotations.migrate(from: addressKey, to: existing.annotationKey)
-                    existing.customName = annotations[existing.annotationKey].name
                 }
                 byID[incoming.id] = existing
             } else {
-                var fresh = incoming
-                // A rediscovered row can arrive with its MAC already filled in, skipping the
-                // address-keyed phase entirely, so the same carry-over has to happen here.
-                annotations.migrate(from: fresh.addressAnnotationKey, to: fresh.annotationKey)
-                fresh.customName = annotations[fresh.annotationKey].name
-                byID[incoming.id] = fresh
+                byID[incoming.id] = incoming
             }
         }
         publish(Array(byID.values))
@@ -197,10 +202,15 @@ final class NetworkScanner {
     }
 
     private func publish(_ list: [Device]) {
+        // Everything derived from outside the scan is applied here, in one pass over the list
+        // that is about to be shown, rather than in whichever merge branch happened to create
+        // each row.
+        annotations.consolidate(list)
         let own = machine?.address
         devices = list
             .map { device in
                 var device = device
+                device.customName = annotations[device.annotationKey].name
                 device.isLocalMachine = device.ipv4 == own
                 return device
             }
@@ -209,10 +219,7 @@ final class NetworkScanner {
         // one of them may simply not have answered yet, and dropping the selection there would
         // close the detail pane on a device that turns up a moment later.
         if !isScanning { pruneSelection() }
-        // A selection that survives a rescan keeps the same ID, so the view's onChange never
-        // fires and the row it points at would sit unscanned. Safe to call on every update: the
-        // guards in scanPorts make it a no-op once one is running or finished.
-        portScanSelectionIfNeeded()
+        reconcileSelectionScan()
     }
 
     private func pruneSelection() {

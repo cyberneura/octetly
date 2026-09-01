@@ -33,16 +33,25 @@ final class AnnotationStore {
         }
     }
 
-    /// Carries an entry over when a device's key changes under it.
+    /// Brings every device's entry onto the key that now identifies it.
     ///
     /// A row starts out keyed by address and switches to its MAC as soon as the neighbour cache
     /// catches up, which is seconds later on a first scan. Anything typed in that window would
-    /// otherwise stay filed under the address and simply stop being displayed. Anything already
-    /// filed under the destination wins — that one was entered against the identity that lasted.
-    func migrate(from old: String, to new: String) {
-        guard old != new, self[new].isEmpty, !self[old].isEmpty else { return }
-        self[new] = self[old]
-        self[old] = DeviceAnnotation()
+    /// otherwise stay filed under the address and simply stop being displayed.
+    ///
+    /// Done once against the published list rather than at each point a MAC can arrive. There is
+    /// more than one such point — a row can gain its MAC mid-scan, or turn up in a later scan
+    /// with it already known — and handling them one at a time is what left the second path
+    /// unhandled twice over. Anything already filed under the MAC wins: that one was entered
+    /// against the identity that lasted.
+    func consolidate(_ devices: [Device]) {
+        for device in devices where device.hasMACAddress {
+            let old = device.addressAnnotationKey
+            let new = device.annotationKey
+            guard self[new].isEmpty, !self[old].isEmpty else { continue }
+            self[new] = self[old]
+            self[old] = DeviceAnnotation()
+        }
     }
 
     private func persist() {

@@ -29,8 +29,15 @@ final class ScanSettingsStore {
     static let concurrencyRange = 4...128
 
     var settings: ScanSettings {
-        didSet { persist() }
+        didSet {
+            persist()
+            onChange?()
+        }
     }
+
+    /// Notified after any change. NetworkScanner uses it to re-check what a setting implies about
+    /// the current selection, so that no view has to remember to.
+    @ObservationIgnored var onChange: (@MainActor () -> Void)?
 
     @ObservationIgnored private let defaults: UserDefaults
 
