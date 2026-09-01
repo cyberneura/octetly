@@ -32,7 +32,7 @@ The pencil at the right of the Name column sets a name for a device, and the det
 
 Both are filed under the device's MAC address where there is one, so they follow the machine when its address changes. There is none for a host reached through a router or a VPN — nothing on this Mac can see it — so those fall back to being filed under the IP address, and both editors say which of the two is in use. An address-keyed entry follows the address rather than the machine: if DHCP hands that address to something else, the name and note go with it.
 
-Search, at the top right of the list, filters on name, IP address, MAC address, and vendor at once.
+Search, in the title bar, filters on name, IP address, MAC address, and vendor at once.
 
 ## Settings
 
