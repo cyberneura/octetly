@@ -109,8 +109,13 @@ enum ScanEngine {
     private static func ipv6Address(for mac: String?) async -> String {
         guard let mac else { return "—" }
         let output = await CommandRunner.run("/usr/sbin/ndp", ["-an"], timeout: 2)
-        return output.split(separator: "\n").first { $0.localizedCaseInsensitiveContains(mac) }
-            .flatMap { $0.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) } ?? "—"
+        let wanted = normalizeMAC(mac)
+        for line in output.split(separator: "\n") {
+            let fields = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            guard fields.count >= 2, normalizeMAC(fields[1]) == wanted else { continue }
+            return fields[0].trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+        }
+        return "—"
     }
 
     private static func normalizeMAC(_ value: String) -> String {

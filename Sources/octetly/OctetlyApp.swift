@@ -1,7 +1,9 @@
 import SwiftUI
+import AppKit
 
 @main
 struct OctetlyApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var scanner = NetworkScanner()
 
     var body: some Scene {
@@ -13,5 +15,12 @@ struct OctetlyApp: App {
         .windowToolbarStyle(.unified)
 
         Settings { SettingsView() }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
