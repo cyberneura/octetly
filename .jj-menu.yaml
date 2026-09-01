@@ -1,0 +1,58 @@
+# jj-menu (https://github.com/cyberneura/jj-menu) 用のメニュー定義。
+#
+# 各エントリのコマンドは、jj-menu が組み立てて**呼び出し元のシェルで eval される**。
+# そのため、複数手順は必ず `&&` で繋いで fail-fast にすること (jj-menu は
+# リストの各行を改行で連結するだけで、`set -e` も `&&` も足さない)。
+# 先頭に `set -e` を置く手もあるが、errexit が対話シェルに残って以後の
+# タイポでシェルごと落ちるので使わない。
+# `cd` を含むものはサブシェルで囲み、実行後に作業ディレクトリを動かさない。
+menu:
+  - title: デバッグ実行
+    help: >
+      ビルドして Octetly を起動する。**初回スキャンでローカルネットワークの
+      許可プロンプトが出る。** ただし `swift run` が作るのは .app バンドルではなく
+      .build 以下の素の実行ファイルなので、プロンプトに出る名前が Octetly ではなく
+      **起動元のターミナル (Terminal / iTerm など) になることがある**。
+      一度拒否すると二度目は無言で失敗し、ホストが 1 台も出ない状態になる —
+      下の「ローカルネットワークの設定を開く」で該当エントリを許可し直すこと。
+      終了は Ctrl-C。
+    shell: ( cd "$(git rev-parse --show-toplevel)" && swift run Octetly )
+
+  - title: ビルドだけする (型チェック代わり)
+    help: >
+      実行せずにコンパイルだけ通す。UI を起動して権限プロンプトを相手にせずに
+      コンパイルエラーだけ見たい時用。swiftLanguageModes は .v6 なので、
+      並行処理まわりの警告ではなく**エラー**として落ちる。
+    shell: ( cd "$(git rev-parse --show-toplevel)" && swift build )
+
+  - title: リリースビルド
+    help: >
+      最適化ありでビルドする。成果物は .build/release/Octetly の単体バイナリで、
+      **.app バンドルではない** (Package.swift の product は executable)。
+      配布物を作る手段は今のところ用意していない。
+    shell: ( cd "$(git rev-parse --show-toplevel)" && swift build -c release )
+
+  - title: クリーンビルド
+    help: >
+      .build を捨ててからビルドし直す。
+      Resources の oui.csv は `.process` でバンドルへコピーされるので、
+      CSV を差し替えたのに古いベンダ名が出続ける時はこれで直る。
+    shell: ( cd "$(git rev-parse --show-toplevel)" && rm -rf .build && swift build )
+
+  - title: OS 側の ARP / NDP キャッシュを見る
+    help: >
+      アプリが読んでいるのと同じ情報を生で出す。アプリに MAC が出ないホストがあった時、
+      **OS 側に載っていないのかこちらのパースの問題か**を切り分けるためのもの。
+      ここに出ているのに画面に無いならパース側。
+      **ここに無いことは「届いていない」を意味しない。** ARP に載るのは同一セグメントの
+      相手だけで、ルータや VPN 越しのホストは ICMP に応答しても載らない。その場合
+      MAC が取れないのは正常で、アプリ側も MAC と Vendor を空欄にする。
+    shell: ( arp -an && echo "--- ndp ---" && ndp -an )
+
+  - title: ローカルネットワークの設定を開く
+    help: >
+      システム設定のプライバシー > ローカルネットワークを開く。
+      **権限が無いと ping は成功したように見えたままホストが 0 件になる** ので、
+      スキャン結果が空の時はまずここを疑う。許可を切り替えた後は
+      アプリ (ターミナル経由なら起動元のターミナル) を再起動しないと反映されない。
+    shell: open "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork"
