@@ -91,6 +91,7 @@ final class NetworkScanner {
         scanTask?.cancel()
         scanTask = nil
         cancelPortScans()
+        resetScanningPorts()
         progress = nil
         isScanning = false
         status = "Scan stopped"
@@ -105,7 +106,13 @@ final class NetworkScanner {
     /// handler for one event, because every defect found in this area was a state change that
     /// nobody had thought to hang a handler on.
     func reconcileSelectionScan() {
-        guard settings.settings.portScanMode == .onSelection, let id = selectedDeviceID else { return }
+        guard settings.settings.portScanMode == .onSelection, let id = selectedDeviceID else {
+            // The other half of the condition. Deselecting, or turning the mode off, means no
+            // host qualifies any more — and a scan already running for one that no longer does
+            // has to stop. Stating only the positive half left it running to completion.
+            cancelPortScans()
+            return
+        }
         scanPorts(for: id)
     }
 
@@ -244,19 +251,26 @@ final class NetworkScanner {
         return "\(progress.phase.label)\(pass) \(completed) of \(total)…\(named)"
     }
 
+    /// Cancels the per-selection scans, and only those.
+    ///
+    /// Resets exactly the rows whose task it cancelled. The after-scan sweep marks rows .scanning
+    /// without a task here, and this runs on every published list while that sweep is going, so
+    /// clearing every .scanning row would wipe the indicator off rows still being worked on.
     private func cancelPortScans(except keep: Device.ID? = nil) {
         for (id, task) in portTasks where id != keep {
             task.cancel()
             portTasks[id] = nil
+            // Nothing else moves a row out of .scanning, so a cancelled scan would otherwise
+            // leave its row claiming to be busy for the life of the app.
+            guard let index = devices.firstIndex(where: { $0.id == id }),
+                  devices[index].portScanState == .scanning else { continue }
+            devices[index].portScanState = .pending
         }
-        // Nothing else ever moves a row out of .scanning, so a cancelled scan would leave its
-        // row claiming to be busy for the life of the app.
-        resetScanningPorts(except: keep)
     }
 
-    private func resetScanningPorts(except keep: Device.ID? = nil) {
-        for index in devices.indices
-        where devices[index].portScanState == .scanning && devices[index].id != keep {
+    /// Clears every busy row, for when the engine's own sweep has gone away with them mid-flight.
+    private func resetScanningPorts() {
+        for index in devices.indices where devices[index].portScanState == .scanning {
             devices[index].portScanState = .pending
         }
     }
