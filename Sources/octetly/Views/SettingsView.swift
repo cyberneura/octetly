@@ -1,14 +1,42 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @Bindable var settings: ScanSettingsStore
+
     var body: some View {
         Form {
-            LabeledContent("Ports", value: "22, 80, 443, 5900")
-            Text("Octetly scans only your directly connected local network.")
-                .foregroundStyle(.secondary)
+            Section("Concurrency") {
+                Stepper(value: $settings.settings.deviceConcurrency,
+                        in: ScanSettingsStore.concurrencyRange, step: 4) {
+                    LabeledContent("Device lookups", value: "\(settings.settings.deviceConcurrency)")
+                }
+                Stepper(value: $settings.settings.portScanConcurrency,
+                        in: ScanSettingsStore.concurrencyRange, step: 4) {
+                    LabeledContent("Port scan sockets", value: "\(settings.settings.portScanConcurrency)")
+                }
+                .disabled(settings.settings.portScanMode != .afterScan)
+                Text("Discovery sends ICMP echo requests from one socket and is not paced by these.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Port scan") {
+                Picker("Run", selection: $settings.settings.portScanMode) {
+                    ForEach(PortScanMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                LabeledContent("Ports", value: PortScanner.standardPorts.map(String.init).joined(separator: ", "))
+            }
+
+            Section("Limits") {
+                LabeledContent("Automatic range", value: "\(LocalNetwork.autoHostLimit.formatted()) addresses")
+                LabeledContent("Entered range", value: "\(ScanRange.maximumHostCount.formatted()) addresses")
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 420)
+        .frame(width: 460)
         .padding()
     }
 }

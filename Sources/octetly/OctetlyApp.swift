@@ -14,7 +14,7 @@ struct OctetlyApp: App {
         .defaultSize(width: 1180, height: 680)
         .windowToolbarStyle(.unified)
 
-        Settings { SettingsView() }
+        Settings { SettingsView(settings: scanner.settings) }
     }
 }
 
