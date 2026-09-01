@@ -41,6 +41,12 @@ struct ContentView: View {
         .onChange(of: scanner.selectedDeviceID) {
             scanner.portScanSelectionIfNeeded()
         }
+        // Turning the mode on is a request to scan what is already selected. Neither the
+        // selection nor the device list changes at that moment, so nothing else would ask.
+        // Covers the Settings window's copy of the picker too — it writes to the same store.
+        .onChange(of: scanner.settings.settings.portScanMode) {
+            scanner.portScanSelectionIfNeeded()
+        }
     }
 
     private var selectedDevice: Device? {

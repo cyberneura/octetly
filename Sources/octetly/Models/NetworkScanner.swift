@@ -146,10 +146,13 @@ final class NetworkScanner {
                     existing.latencyMilliseconds = latency
                 }
                 if !existing.hasMACAddress, incoming.hasMACAddress {
+                    let addressKey = existing.annotationKey
                     existing.macAddress = incoming.macAddress
                     existing.vendor = incoming.vendor
-                    // The annotation key is the MAC once there is one, so a name filed under the
-                    // address has to be looked up again under the key that now applies.
+                    // The key is the MAC once there is one, so anything filed under the address
+                    // moves with it — otherwise a name typed before ARP caught up would still be
+                    // stored, just never looked for again.
+                    annotations.migrate(from: addressKey, to: existing.annotationKey)
                     existing.customName = annotations[existing.annotationKey].name
                 }
                 byID[incoming.id] = existing
