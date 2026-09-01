@@ -18,7 +18,7 @@ struct OctetlyApp: App {
         // area and at where the traffic lights land.
         .windowToolbarStyle(.unifiedCompact)
 
-        Settings { SettingsView(settings: scanner.settings) }
+        Settings { SettingsView(scanner: scanner, settings: scanner.settings) }
     }
 }
 

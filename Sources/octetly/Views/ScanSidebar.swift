@@ -120,16 +120,8 @@ struct ScanSidebar: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Port scan")
                     .font(.callout)
-                Picker("Port scan", selection: $settings.settings.portScanMode) {
-                    ForEach(PortScanMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
-                    }
-                }
-                .labelsHidden()
-                // The engine takes the mode when a scan starts and keeps it for that run, so a
-                // change made mid-scan would not reach the sweep it appears to be about. Locked
-                // while scanning rather than left to look live, matching Target above.
-                .disabled(scanner.isScanning)
+                PortScanModePicker(settings: settings, isScanning: scanner.isScanning)
+                    .labelsHidden()
 
                 if settings.settings.portScanMode != .off {
                     if settings.settings.portScanMode == .afterScan {

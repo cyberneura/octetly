@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @Bindable var scanner: NetworkScanner
     @Bindable var settings: ScanSettingsStore
 
     var body: some View {
@@ -22,11 +23,7 @@ struct SettingsView: View {
             }
 
             Section("Port scan") {
-                Picker("Run", selection: $settings.settings.portScanMode) {
-                    ForEach(PortScanMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
-                    }
-                }
+                PortScanModePicker(settings: settings, isScanning: scanner.isScanning)
                 Text("A scan takes this when it starts and keeps it for that run.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
