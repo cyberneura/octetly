@@ -205,16 +205,24 @@ final class NetworkScanner {
                 return device
             }
             .sorted { $0.addressValue < $1.addressValue }
-        if let id = selectedDeviceID, !devices.contains(where: { $0.id == id }) {
-            selectedDeviceID = nil
-        }
+        // Only once the scan is done. These lists are cumulative and partial — a host absent from
+        // one of them may simply not have answered yet, and dropping the selection there would
+        // close the detail pane on a device that turns up a moment later.
+        if !isScanning { pruneSelection() }
         // A selection that survives a rescan keeps the same ID, so the view's onChange never
         // fires and the row it points at would sit unscanned. Safe to call on every update: the
         // guards in scanPorts make it a no-op once one is running or finished.
         portScanSelectionIfNeeded()
     }
 
+    private func pruneSelection() {
+        guard let id = selectedDeviceID, !devices.contains(where: { $0.id == id }) else { return }
+        selectedDeviceID = nil
+    }
+
     private func finish(_ snapshot: ScanSnapshot) {
+        // The list is final here, so a selection pointing at nothing really is stale.
+        pruneSelection()
         let interface = snapshot.network.map { " on \($0.interface)" } ?? ""
         status = "Scanned \(snapshot.range.text)\(interface) · \(devices.count.formatted()) found"
     }
