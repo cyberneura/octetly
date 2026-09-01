@@ -201,9 +201,14 @@ enum ScanEngine {
 
             // Hosts that never answered but are in the neighbour cache anyway, plus this Mac.
             if !Task.isCancelled {
-                let arp = await arpTable()
+                var arp = await arpTable()
                 live.formUnion(arp.keys.filter(range.contains))
-                if let network, range.contains(network.address) { live.insert(network.address) }
+                if let network, range.contains(network.address) {
+                    live.insert(network.address)
+                    // A machine does not ARP itself, so its own row would be the one row with no
+                    // MAC and no vendor — while the sidebar shows both, from the same interface.
+                    if let mac = network.macAddress { arp[network.address] = mac }
+                }
                 let added = merge(live, arp: arp, latencies: latencies,
                                   vendorDatabase: vendorDatabase, into: &devices)
                 emit(.devices(ordered(devices)))

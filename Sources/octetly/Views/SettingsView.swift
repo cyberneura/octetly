@@ -27,6 +27,9 @@ struct SettingsView: View {
                         Text(mode.label).tag(mode)
                     }
                 }
+                Text("A scan takes this when it starts and keeps it for that run.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 LabeledContent("Ports", value: PortScanner.standardPorts.map(String.init).joined(separator: ", "))
             }
 

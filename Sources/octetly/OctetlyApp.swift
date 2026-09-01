@@ -12,7 +12,11 @@ struct OctetlyApp: App {
                 .frame(minWidth: 900, minHeight: 520)
         }
         .defaultSize(width: 1180, height: 680)
-        .windowToolbarStyle(.unified)
+        // Compact puts the title and the toolbar on one row, so the search field sits in the
+        // title bar rather than costing the panes a strip of their own. Hiding the bar and
+        // rebuilding that strip by hand was the alternative, and it meant guessing at the safe
+        // area and at where the traffic lights land.
+        .windowToolbarStyle(.unifiedCompact)
 
         Settings { SettingsView(settings: scanner.settings) }
     }

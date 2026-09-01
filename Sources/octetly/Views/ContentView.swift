@@ -35,6 +35,9 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Octetly")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) { searchField }
+        }
         .sheet(isPresented: $editingRanges) {
             ScanRangeEditor(store: scanner.ranges)
         }
@@ -52,39 +55,30 @@ struct ContentView: View {
     }
 
     private var deviceTable: some View {
-        VStack(spacing: 0) {
-            tableHeader
-            Divider()
-            table
-        }
-        .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+        table
+            .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var tableHeader: some View {
-        HStack(spacing: 8) {
-            Spacer()
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Name, address, MAC, vendor", text: $searchText)
-                    .textFieldStyle(.plain)
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Name, address, MAC, vendor", text: $searchText)
+                .textFieldStyle(.plain)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
                 }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-            .frame(width: 260)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+        .frame(width: 240)
     }
 
     private var table: some View {
