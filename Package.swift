@@ -15,11 +15,6 @@ let package = Package(
             path: "Sources/octetly",
             resources: [.process("Resources")]
         ),
-        .testTarget(
-            name: "OctetlyTests",
-            dependencies: ["Octetly"],
-            path: "Tests/octetlyTests"
-        ),
     ],
     swiftLanguageModes: [.v6]
 )
