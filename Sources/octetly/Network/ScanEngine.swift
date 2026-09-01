@@ -131,6 +131,20 @@ enum ScanEngine {
             let pinger = ICMPPinger()
             var pending = hosts
 
+            /// Takes everything a sweep found all the way to the screen: rows, latencies, and the
+            /// queue that names them. Every place replies arrive goes through here, so none can
+            /// collect them and stop halfway.
+            func record(_ found: SweepResult) async {
+                guard !found.responded.isEmpty else { return }
+                live.formUnion(found.responded)
+                latencies.merge(found.latencies) { existing, _ in existing }
+                let arp = await arpTable()
+                let added = merge(found.responded, arp: arp, latencies: latencies,
+                                  vendorDatabase: vendorDatabase, into: &devices)
+                emit(.devices(ordered(devices)))
+                for address in added { enqueue.yield(address) }
+            }
+
             for pass in 1...discoveryPasses {
                 guard !Task.isCancelled, !pending.isEmpty else { break }
                 let windowSize = ICMPPinger.sendWindow(for: pending.count)
@@ -153,26 +167,19 @@ enum ScanEngine {
                     }
                     // A multi-homed host answers from whichever address its routing table picks,
                     // which can be one that was never probed and outside the range being scanned.
-                    answered = answered.filter(range.contains)
-                    if !answered.responded.isEmpty {
-                        live.formUnion(answered.responded)
-                        latencies.merge(answered.latencies) { existing, _ in existing }
-                        let arp = await arpTable()
-                        let added = merge(answered.responded, arp: arp, latencies: latencies,
-                                          vendorDatabase: vendorDatabase, into: &devices)
-                        emit(.devices(ordered(devices)))
-                        for address in added { enqueue.yield(address) }
-                    }
+                    await record(answered.filter(range.contains))
                     emit(.progress(ScanProgress(phase: .probing, completed: window.endIndex,
                                                 total: pending.count, pass: pass)))
                 }
 
                 guard !Task.isCancelled else { break }
                 if let pinger {
-                    let late = await sweep(pinger) { $0.drain(for: finalReplyTimeout) }
-                        .filter(range.contains)
-                    live.formUnion(late.responded)
-                    latencies.merge(late.latencies) { existing, _ in existing }
+                    // Recorded the same way as a window's own replies. A host that answers only
+                    // during this wait used to reach `live` and nothing else until the final
+                    // merge, so it stayed off screen for the remaining rounds — and vanished
+                    // altogether if the scan was stopped first, since that merge is skipped.
+                    await record(await sweep(pinger) { $0.drain(for: finalReplyTimeout) }
+                        .filter(range.contains))
                 }
                 pending = pending.filter { !live.contains($0) }
             }
