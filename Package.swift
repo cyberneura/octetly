@@ -12,6 +12,13 @@ let package = Package(
             path: "Sources/octetly",
             resources: [.process("Resources")]
         ),
+        // The parsing the app depends on, tested without launching it. A test
+        // target may depend on an executable target since Swift 5.5.
+        .testTarget(
+            name: "OctetlyTests",
+            dependencies: ["Octetly"],
+            path: "Tests/OctetlyTests"
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

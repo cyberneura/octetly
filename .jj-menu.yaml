@@ -25,12 +25,35 @@ menu:
       並行処理まわりの警告ではなく**エラー**として落ちる。
     shell: ( cd "$(git rev-parse --show-toplevel)" && swift build )
 
+  - title: テスト
+    help: >
+      `swift test` を走らせる。対象は入力を解釈する純粋なロジック
+      (ScanRange / IPv4 / OUIDatabase) だけで、UI とネットワーク I/O は入っていない。
+      リリースビルドの門番でもあるので、ここが赤いままだとリリースが出せない。
+    shell: ( cd "$(git rev-parse --show-toplevel)" && swift test )
+
   - title: リリースビルド
     help: >
       最適化ありでビルドする。成果物は .build/release/Octetly の単体バイナリで、
       **.app バンドルではない** (Package.swift の product は executable)。
-      配布物を作る手段は今のところ用意していない。
+      配布する .app が要るなら下の「配布用の .app を作る」を使うこと。
     shell: ( cd "$(git rev-parse --show-toplevel)" && swift build -c release )
+
+  - title: 配布用の .app を作る
+    help: >
+      dist/Octetly.app を組み立てる (universal バイナリ + リソースバンドル +
+      AppIcon.png から起こした .icns + packaging/Info.plist)。
+      **手元では署名しない。** 署名と公証は GitHub Actions のリリースジョブが行う。
+      2 アーキ分のビルドになるので、素の `swift build` より時間がかかる。
+    shell: ( cd "$(git rev-parse --show-toplevel)" && scripts/make-app.sh )
+
+  - title: リリースする
+    help: >
+      VERSION を採番して main に push し、始まったリリースビルドを watch する。
+      **クリーンな main が origin/main と一致している時しか動かない。**
+      リリースを始めるのは push で、判定は「その version がリリース済みか」。
+      既定は patch。minor / major はスクリプトに引数を渡すこと。
+    shell: ( cd "$(git rev-parse --show-toplevel)" && scripts/release.sh )
 
   - title: クリーンビルド
     help: >

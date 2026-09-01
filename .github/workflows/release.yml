@@ -1,0 +1,327 @@
+name: Release
+
+# A release is decided by the VERSION file on main: change it and this builds and
+# publishes that version, leave it and pushing changes nothing. Locally,
+# scripts/release.sh (`./scripts/release.sh [patch|minor|major]`) picks the next
+# number and pushes it.
+#
+# What decides whether to run is not the diff but whether that version is already
+# released, so squash, rebase and direct pushes all reach the same answer. There
+# is no paths filter for the same reason: a bump that arrives in an unexpected
+# shape is still a bump.
+on:
+  push:
+    branches: [main]
+  # On a pull request only the test job runs (everything past plan is held back
+  # by an if). The gate that guards a release is then the same one that runs
+  # before a merge, so the two cannot drift apart.
+  pull_request:
+  # For when the version is right but the run failed on something transient. It
+  # goes through the same check, so a published version cannot be built twice.
+  workflow_dispatch:
+
+# Nothing by default; each job asks for what it needs. test runs code a pull
+# request brought with it, so it is held to contents: read.
+permissions: {}
+
+# One release at a time. Both settings are needed:
+#   cancel-in-progress: false -- a later push must not cancel a running release,
+#     because its bump commit is already on main and would never be published.
+#   queue: max -- the default (queue: single) keeps one pending run and replaces
+#     it, so three pushes in a row lose the middle version.
+# (queue: max cannot be combined with cancel-in-progress: true.)
+#
+# Pull request runs have nothing to serialise, so they are grouped per commit
+# rather than joining the release group -- otherwise a single pull request would
+# leave a release waiting behind it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('{0}-{1}', github.ref, github.sha) || 'release' }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  # Asks the one cheap question before anything spends a macOS runner on it: is
+  # this version still unreleased?
+  plan:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.decide.outputs.release }}
+    steps:
+      # A dispatch can name its own ref. Without this, a branch carrying an
+      # unreleased version could be released as that branch's contents.
+      - name: Refuse to release from anywhere but main
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::releases come from main, and this run is on ${REF}"
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          if [ -z "$VERSION" ]; then
+            echo "::error::VERSION is empty"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether this version still needs releasing
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # This endpoint answers for published releases only: a draft has no tag
+          # yet, which is also what makes it the right question here. A draft a
+          # failed run left behind is filled in by running the same version again.
+          #
+          # Only a 404 is read as "not released". Reading a rate limit or an
+          # outage that way would build a published version a second time and
+          # publish it twice.
+          status=$(gh api "repos/${GH_REPO}/releases/tags/v${VERSION}" \
+            --silent --include 2>/dev/null | head -n 1 | awk '{print $2}' || true)
+          case "$status" in
+            404)
+              echo "release=true" >> "$GITHUB_OUTPUT"
+              echo "Releasing v${VERSION}"
+              ;;
+            200)
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              echo "v${VERSION} is already released; nothing to do."
+              ;;
+            *)
+              echo "::error::could not tell whether v${VERSION} exists (HTTP ${status:-none}). Not guessing."
+              exit 1
+              ;;
+          esac
+
+  # The gate in front of the release build. Policy:
+  # cyberneura/cyberneura-github-actions docs/build-requires-tests.md
+  #
+  # runs-on matches the build job (rule 4): the app is AppKit and SwiftUI
+  # throughout, so nothing here compiles anywhere but macOS.
+  test:
+    # On push and dispatch this runs only for a version that is actually being
+    # released; without that, every push to main would start a macOS runner and
+    # the plan job would have no purpose. On a pull request plan is skipped, and
+    # a skipped dependency skips this job too, so !cancelled() undoes that before
+    # the event is checked (a failed plan still stops it, through needs.plan.result).
+    needs: plan
+    if: >-
+      ${{ !cancelled()
+          && (github.event_name == 'pull_request'
+              || (needs.plan.result == 'success'
+                  && needs.plan.outputs.release == 'true')) }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # Package.swift asks for swift-tools-version 6.2, which is Xcode 26. The
+      # image default is already 26.x, and naming it keeps a future image change
+      # from picking an older one silently.
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Show the toolchain
+        run: swift --version
+
+      - name: Run tests
+        run: swift test
+
+      # The tests cover the parsing; this covers everything the app is made of,
+      # under the strict concurrency the package asks for.
+      - name: Build
+        run: swift build
+
+  build:
+    # Not built without passing the gate. needs only reaches jobs in the same
+    # run, which is why the tests are not in a workflow of their own.
+    needs: [plan, test]
+    if: needs.plan.outputs.release == 'true'
+    runs-on: macos-latest
+    # Long because notarization is a queue on Apple's side and its wait is not
+    # predictable. It is a ceiling for a hang, not an estimate.
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      # persist-credentials: false keeps checkout from leaving a write-scoped
+      # GITHUB_TOKEN in .git/config where a later step could read it. This job
+      # holds an Apple signing certificate, so every `uses:` is pinned to a
+      # commit SHA rather than a tag: a moved tag would otherwise be enough to
+      # take the certificate and the secrets. Update them by the trailing
+      # comment (# v4) rather than by switching back to the tag.
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      # A missing secret would not fail the build: it would produce an app that
+      # is signed ad hoc, or not notarized, and the publish job only looks at
+      # whether the steps succeeded. So it is caught here instead, before
+      # anything is built.
+      - name: Check signing secrets
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+            APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing repository secrets: ${missing[*]}. Signing and notarization would be silently skipped."
+            exit 1
+          fi
+          echo "All signing and notarization secrets are present."
+
+      # The certificate goes into a keychain of its own. Its password is used
+      # once and never again, so it is generated here rather than kept a secret.
+      - name: Import Apple Developer certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import "$RUNNER_TEMP/certificate.p12" -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          # codesign reads identities from the search list rather than from the
+          # default keychain, so it has to be on both.
+          security list-keychains -d user -s build.keychain
+          # find-identity exits 0 even when it found nothing, so the grep is the
+          # actual check. Failing here says what is wrong; failing later says
+          # only that the build did.
+          security find-identity -v -p codesigning
+          security find-identity -v -p codesigning | grep -q "Developer ID Application" || {
+            echo "Error: no 'Developer ID Application' identity in the keychain search list" >&2
+            exit 1
+          }
+          rm "$RUNNER_TEMP/certificate.p12"
+
+      - name: Build and sign the app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: scripts/make-app.sh --sign "$APPLE_SIGNING_IDENTITY"
+
+      # Notarization takes a zip and gives back a ticket; the ticket is then
+      # stapled to the app so that a Mac with no network can still check it.
+      # --wait is what makes a rejection fail the run rather than pass silently.
+      - name: Notarize and staple the app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ditto -c -k --keepParent dist/Octetly.app "$RUNNER_TEMP/Octetly.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/Octetly.zip" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple dist/Octetly.app
+
+      # Built from the stapled app, so the copy a user drags out carries the
+      # ticket. The dmg is then notarized in its own right: without that the
+      # download itself is unsigned even though what it installs is not.
+      - name: Build, sign and notarize the dmg
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          scripts/make-dmg.sh --sign "$APPLE_SIGNING_IDENTITY"
+          DMG="dist/Octetly_${VERSION}_universal.dmg"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+          # Says what a user's Mac will say. It reads the stapled ticket rather
+          # than asking Apple, so it is also the check that stapling worked.
+          spctl --assess --type open --context context:primary-signature -vv "$DMG"
+
+      # Created as a draft, then published by the job below once everything has
+      # succeeded, so that a failed run cannot leave a half-filled release in
+      # front of people.
+      - name: Upload to a draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          DMG="dist/Octetly_${VERSION}_universal.dmg"
+          # A draft left by an earlier failed run would otherwise turn into a
+          # second draft for the same version.
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            # Re-pointed as well as refilled: a draft from an earlier failed run
+            # still carries that run's commit, and the dmg being uploaded now was
+            # built from this one.
+            gh release edit "v${VERSION}" --target "$GITHUB_SHA"
+            gh release upload "v${VERSION}" "$DMG" --clobber
+          else
+            # --target pins the tag to the commit this run built. Without it the
+            # tag is created at whatever main points to when the release is
+            # made, which is not the same commit if a later push has landed
+            # while this run was queued behind an earlier one.
+            gh release create "v${VERSION}" "$DMG" \
+              --target "$GITHUB_SHA" \
+              --draft --title "Octetly v${VERSION}" \
+              --notes "Octetly v${VERSION}"
+          fi
+
+  # Publishes the draft only once the build has succeeded. If it has not, the
+  # draft stays a draft.
+  publish:
+    needs: [plan, build]
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: gh release edit "v${VERSION}" --draft=false --latest

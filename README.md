@@ -2,13 +2,25 @@
 
 Octetly is a native macOS LAN scanner built with SwiftUI and AppKit. It discovers hosts with ICMP echo requests and the system ARP cache, then displays addresses, hardware identity, network names, and common remote-access/web ports.
 
-## Run
+## Install
+
+```sh
+brew install --cask cyberneura/tap/octetly
+```
+
+A universal build (Intel and Apple Silicon), signed with a Developer ID and notarized.
+
+## Run from source
 
 Requirements: macOS 14 or newer and Swift 6.2.
 
 ```sh
 swift run Octetly
 ```
+
+`swift run` produces a bare executable rather than an app bundle, which is enough to
+use but is not what is released. `scripts/make-app.sh` builds `dist/Octetly.app`: the
+universal binary, the resource bundle, an icon, and the `Info.plist` in `packaging/`.
 
 The window is three panes: scan controls on the left, results in the middle, and details on the right for whichever device is selected. Click **Scan** (or press Command-R). The initial scan may trigger macOS's Local Network privacy prompt.
 
@@ -80,3 +92,23 @@ Vendors come from a bundled copy of the IEEE registries, merged from all three a
 An address with the locally administered bit set is reported as `Randomized` rather than as an unknown vendor: no registry ever assigned it. Phones set one per network by default, so this is the usual answer on a Wi-Fi segment.
 
 Octetly runs `/usr/sbin/arp`, `/usr/sbin/ndp`, `/usr/bin/dig`, `/usr/bin/smbutil`, and `/sbin/ping` as a fallback, all included with macOS. It does not send scan results anywhere.
+
+## Releases
+
+A release is decided by the `VERSION` file on `main`: change it and
+`.github/workflows/release.yml` builds that version, signs and notarizes it, and puts
+the dmg on a GitHub Release. Leave it and pushing changes nothing, so what decides is
+not the diff but whether that version has been released already.
+
+```sh
+scripts/release.sh          # patch
+scripts/release.sh minor
+scripts/release.sh major
+```
+
+The script only runs from a clean `main` that matches `origin/main`. It writes the new
+number to `VERSION`, pushes, and watches the run that starts.
+
+The Homebrew cask lives in [cyberneura/homebrew-tap](https://github.com/cyberneura/homebrew-tap)
+and points itself at the newest release once an hour, so `brew` is up to an hour behind
+a release.

@@ -46,7 +46,7 @@ struct OUIDatabase: Sendable {
     }
 
     static func loadBundled() -> OUIDatabase {
-        guard let url = Bundle.module.url(forResource: "oui", withExtension: "csv"),
+        guard let url = BundledResource.url(forResource: "oui", withExtension: "csv"),
               let csv = try? String(contentsOf: url, encoding: .utf8) else {
             return OUIDatabase(csv: "prefix,vendor")
         }

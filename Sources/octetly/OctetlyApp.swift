@@ -29,16 +29,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyDockIcon()
     }
 
-    /// Sets the Dock icon from the bundled image.
+    /// Sets the Dock icon from the bundled image, where nothing else will.
     ///
     /// `swift run` produces a bare executable, not an .app, so there is no Info.plist and no
     /// asset catalog for macOS to read an icon out of — it would use the generic placeholder.
-    /// Assigning it at launch is what works for a package executable. Bundling the same binary
-    /// into a real .app later does not make this harmless: it still runs, and would override
-    /// whatever .icns the bundle carries, so it has to go or become conditional at that point.
+    /// Assigning it at launch is what works for a package executable.
+    ///
+    /// The released build is a real .app (`scripts/make-app.sh`) and carries an .icns, which
+    /// macOS has already applied by this point. Assigning over it would replace a full icon set
+    /// with a single 512-pixel image, so the .app is left alone: the presence of CFBundleIconFile
+    /// is what tells the two apart, since a package executable has no Info.plist to hold it.
     @MainActor
     private func applyDockIcon() {
-        guard let url = Bundle.module.url(forResource: "AppIcon", withExtension: "png"),
+        guard Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") == nil else { return }
+        guard let url = BundledResource.url(forResource: "AppIcon", withExtension: "png"),
               let icon = NSImage(contentsOf: url) else { return }
         NSApp.applicationIconImage = icon
     }
