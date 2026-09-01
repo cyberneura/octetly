@@ -94,15 +94,19 @@ final class NetworkScanner {
     }
 
     func scanPorts(for id: Device.ID) {
-        guard let index = devices.firstIndex(where: { $0.id == id }),
-              devices[index].portScanState != .done else { return }
+        // Cancelled before the guards, not after: the selection has moved regardless of whether
+        // the newly selected row needs scanning, and returning early for one that was already
+        // scanned would leave the previous host running.
+        //
         // One host at a time, so that clicking down a list does not leave a scan running per row.
         // Cancelling is not immediate: the connect attempts are already blocked in poll() and run
         // to their own timeout, so two hosts' sockets can overlap for a fraction of a second. The
         // port scan concurrency setting governs the after-scan sweep, which is the only place a
         // figure like that has anything to pace.
         cancelPortScans(except: id)
-        guard portTasks[id] == nil else { return }
+        guard portTasks[id] == nil,
+              let index = devices.firstIndex(where: { $0.id == id }),
+              devices[index].portScanState != .done else { return }
 
         devices[index].portScanState = .scanning
         let address = devices[index].ipv4
@@ -198,6 +202,10 @@ final class NetworkScanner {
         if let id = selectedDeviceID, !devices.contains(where: { $0.id == id }) {
             selectedDeviceID = nil
         }
+        // A selection that survives a rescan keeps the same ID, so the view's onChange never
+        // fires and the row it points at would sit unscanned. Safe to call on every update: the
+        // guards in scanPorts make it a no-op once one is running or finished.
+        portScanSelectionIfNeeded()
     }
 
     private func finish(_ snapshot: ScanSnapshot) {
