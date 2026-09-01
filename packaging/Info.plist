@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The Info.plist for the built app. scripts/make-app.sh copies this in with
+  __VERSION__ replaced by the contents of VERSION.
+
+  A SwiftPM executable has no Info.plist of its own, so everything macOS reads
+  about the app (its identity, its icon, and the sentence shown in the local
+  network prompt) comes from here.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Octetly</string>
+	<key>CFBundleDisplayName</key>
+	<string>Octetly</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.cyberneura.octetly</string>
+	<key>CFBundleExecutable</key>
+	<string>Octetly</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!--
+	  Shown in the local network prompt. Without it the prompt names the app and
+	  nothing else, and a scanner asking for the local network with no reason
+	  given is the one a user should say no to.
+	-->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Octetly lists the devices on your local network, so it has to reach them.</string>
+</dict>
+</plist>

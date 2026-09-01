@@ -1,6 +1,8 @@
 .DS_Store
 /.build
 /Packages
+# scripts/make-app.sh と scripts/make-dmg.sh の出力
+/dist
 xcuserdata/
 DerivedData/
 .swiftpm/configuration/registries.json
