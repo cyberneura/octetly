@@ -158,6 +158,9 @@ final class NetworkScanner {
                 byID[incoming.id] = existing
             } else {
                 var fresh = incoming
+                // A rediscovered row can arrive with its MAC already filled in, skipping the
+                // address-keyed phase entirely, so the same carry-over has to happen here.
+                annotations.migrate(from: fresh.addressAnnotationKey, to: fresh.annotationKey)
                 fresh.customName = annotations[fresh.annotationKey].name
                 byID[incoming.id] = fresh
             }

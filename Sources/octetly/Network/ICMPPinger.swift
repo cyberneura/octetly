@@ -50,6 +50,8 @@ final class ICMPPinger: @unchecked Sendable {
     // address rather than by sequence number because a pass only re-sends to addresses that have
     // stayed silent, so the last send is always the one a reply belongs to.
     private var sentAt: [String: DispatchTime] = [:]
+    private let stopLock = NSLock()
+    private var stopped = false
 
     init?() {
         let descriptor = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP)
@@ -74,9 +76,27 @@ final class ICMPPinger: @unchecked Sendable {
     /// `pacing` is the gap between sends. Zero saturates the socket, which a switched LAN absorbs;
     /// a tunnel or a rate-limited router does not, and drops most of the burst. The same host that
     /// is lost in a burst answers every time when probed on its own.
+    /// Stops the send loop at its next address.
+    ///
+    /// The loop is synchronous and runs on BlockingWork, where Task.isCancelled reads false, so
+    /// cancelling the scan cannot reach it on its own. A paced pass spends seconds inside a single
+    /// call — long enough for Stop to look ignored while probes keep going out.
+    func stop() {
+        stopLock.lock()
+        stopped = true
+        stopLock.unlock()
+    }
+
+    private var isStopped: Bool {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        return stopped
+    }
+
     func probe(_ addresses: some Sequence<String>, timeout: TimeInterval, pacing: TimeInterval = 0) -> SweepResult {
         var result = SweepResult()
         for address in addresses {
+            if isStopped { return result }
             probeOne(address)
             // Read anything already back before sending the next one. Waiting until the whole
             // window has gone out charges every round-trip time with the rest of the send loop.
@@ -107,7 +127,7 @@ final class ICMPPinger: @unchecked Sendable {
         while true {
             collect(into: &result)
             let remaining = deadline.timeIntervalSinceNow
-            guard remaining > 0 else { break }
+            guard remaining > 0, !isStopped else { break }
             var event = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
             guard poll(&event, 1, Int32(remaining * 1000)) > 0 else { break }
         }

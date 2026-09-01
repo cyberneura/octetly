@@ -34,7 +34,11 @@ struct Device: Identifiable, Hashable, Sendable {
     /// address stands in. Callers surface which of the two was used, because an address-keyed note
     /// follows the address rather than the machine: DHCP hands it to something else and the note
     /// goes with it.
-    var annotationKey: String { hasMACAddress ? "mac:\(macAddress)" : "ip:\(ipv4)" }
+    var annotationKey: String { hasMACAddress ? "mac:\(macAddress)" : addressAnnotationKey }
+
+    /// The key this device would have had before its MAC was known, so a scan that finds it with
+    /// a MAC straight away can still pick up what an earlier one filed under the address.
+    var addressAnnotationKey: String { "ip:\(ipv4)" }
 
     var hasName: Bool { !customName.isEmpty || hostname != "—" }
     var hasVendor: Bool {

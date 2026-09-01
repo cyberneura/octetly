@@ -144,8 +144,8 @@ enum ScanEngine {
                     let window = pending[start..<min(start + windowSize, pending.count)]
                     var answered: SweepResult
                     if let pinger {
-                        answered = await BlockingWork.run {
-                            pinger.probe(window, timeout: windowReplyTimeout, pacing: pacing)
+                        answered = await sweep(pinger) {
+                            $0.probe(window, timeout: windowReplyTimeout, pacing: pacing)
                         }
                     } else {
                         // Only reached where the ICMP socket could not be opened at all.
@@ -169,7 +169,7 @@ enum ScanEngine {
 
                 guard !Task.isCancelled else { break }
                 if let pinger {
-                    let late = await BlockingWork.run { pinger.drain(for: finalReplyTimeout) }
+                    let late = await sweep(pinger) { $0.drain(for: finalReplyTimeout) }
                         .filter(range.contains)
                     live.formUnion(late.responded)
                     latencies.merge(late.latencies) { existing, _ in existing }
@@ -183,8 +183,8 @@ enum ScanEngine {
             // number comparable to what ping(8) reports for the same host.
             if let pinger, !live.isEmpty, !Task.isCancelled {
                 let sorted = live.sorted()
-                let measured = await BlockingWork.run {
-                    pinger.probe(sorted, timeout: latencyReplyTimeout, pacing: latencyPacing)
+                let measured = await sweep(pinger) {
+                    $0.probe(sorted, timeout: latencyReplyTimeout, pacing: latencyPacing)
                 }
                 // A host that stayed silent through every round can answer here, either late or
                 // because this pass is the first probe it did not lose. Folding the responders
@@ -224,6 +224,21 @@ enum ScanEngine {
 
         guard !Task.isCancelled else { return }
         emit(.finished(ScanSnapshot(range: range, network: network)))
+    }
+
+    /// Runs one blocking sweep, with Stop wired through to it.
+    ///
+    /// The pinger's loops run on BlockingWork, where Task.isCancelled reads false, so cancelling
+    /// the scan cannot stop them on its own. A paced pass spends seconds inside a single call.
+    private static func sweep(
+        _ pinger: ICMPPinger,
+        _ body: @escaping @Sendable (ICMPPinger) -> SweepResult
+    ) async -> SweepResult {
+        await withTaskCancellationHandler {
+            await BlockingWork.run { body(pinger) }
+        } onCancel: {
+            pinger.stop()
+        }
     }
 
     /// Consumes addresses as discovery finds them, keeping `concurrency` lookups in flight.
