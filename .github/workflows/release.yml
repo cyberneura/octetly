@@ -319,9 +319,29 @@ jobs:
         with:
           persist-credentials: false
 
+      # Whether this version is the newest published one, not whether it is the
+      # one being published right now. The concurrency group serialises release
+      # runs but does not order them, so a run for an older version can finish
+      # after a newer version has already gone out. Passing --latest
+      # unconditionally would then walk the Latest badge backwards, and
+      # everything that reads releases/latest follows it back -- the Homebrew
+      # tap picks the version to ship from exactly that endpoint.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.plan.outputs.version }}
-        run: gh release edit "v${VERSION}" --draft=false --latest
+        run: |
+          # This release is still a draft and so is not in the list; it is added
+          # by hand, which also gives sort something to compare on a first
+          # release where the list is empty.
+          published=$(gh release list --exclude-drafts --exclude-pre-releases \
+            --limit 100 --json tagName --jq '.[].tagName' \
+            | sed -n 's/^v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p')
+          newest=$(printf '%s\n%s\n' "$published" "$VERSION" | sort -V | tail -1)
+          if [ "$newest" = "$VERSION" ]; then
+            gh release edit "v${VERSION}" --draft=false --latest
+          else
+            echo "v${newest} is already out; publishing v${VERSION} without the Latest badge."
+            gh release edit "v${VERSION}" --draft=false --latest=false
+          fi
