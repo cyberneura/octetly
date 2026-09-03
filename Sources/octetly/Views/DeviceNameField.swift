@@ -54,7 +54,7 @@ struct DeviceNameCell: View {
 
     private var editor: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Name for \(device.ipv4)").font(.headline)
+            Text("Name for \(device.displayAddress)").font(.headline)
             TextField(device.hostname == "—" ? "Name" : device.hostname, text: $draft)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 260)
@@ -62,7 +62,7 @@ struct DeviceNameCell: View {
 
             Text(device.hasMACAddress
                  ? "Filed under \(device.macAddress), so it follows this device if its IP changes."
-                 : "Filed under \(device.ipv4). There is no MAC address for a host reached through a router or a VPN, so this name stays with the address rather than the machine.")
+                 : "Filed under \(device.annotationAddress). This device has no MAC address for the name to follow, so it stays with the address rather than the machine.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 260, alignment: .leading)
