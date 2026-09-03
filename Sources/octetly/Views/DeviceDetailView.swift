@@ -23,9 +23,29 @@ struct DeviceDetailView: View {
                 LabeledContent("MAC address", value: device.macAddress)
             }
             Section("Addresses") {
-                LabeledContent("IPv4", value: device.ipv4)
-                LabeledContent("IPv6", value: device.ipv6)
+                LabeledContent("IPv4", value: device.ipv4 ?? "—")
+                if device.hasIPv6 {
+                    LabeledContent("IPv6") {
+                        VStack(alignment: .trailing, spacing: 3) {
+                            ForEach(device.ipv6Addresses, id: \.self) { address in
+                                Text(address)
+                                    .font(.callout.monospaced())
+                                    .multilineTextAlignment(.trailing)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                } else {
+                    LabeledContent("IPv6", value: "—")
+                }
                 LabeledContent("Ping", value: device.latencySummary)
+                LabeledContent("Seen by", value: device.discoverySummary)
+                if !device.answeredEcho {
+                    Text("Nothing answered an echo request at this address. It is here because the kernel holds a hardware address for it and has heard from that NIC recently — which is what a machine that filters ICMP looks like, and also what one that has just moved to another address looks like.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Section("Network names") {
                 LabeledContent("DNS name", value: device.dnsName)
@@ -58,6 +78,6 @@ struct DeviceDetailView: View {
     private var keyDescription: String {
         device.hasMACAddress
             ? "Filed under the MAC address, so it follows this device if its IP changes."
-            : "Filed under \(device.ipv4). There is no MAC address for a host reached through a router or a VPN, so this note stays with the address rather than the machine."
+            : "Filed under \(device.annotationAddress). This device has no MAC address for the note to follow, so it stays with the address rather than the machine."
     }
 }

@@ -23,8 +23,8 @@ swift run Octetly
 ## テスト
 
 `Tests/OctetlyTests/` に swift-testing のテストがある。対象は入力を解釈する純粋な
-ロジック (`ScanRange` / `IPv4` / `OUIDatabase`) だけで、UI とネットワーク I/O は
-入っていない。
+ロジック (`ScanRange` / `IPv4` / `IPv6` / `OUIDatabase` / `NeighbourCache` / `Device`) だけで、
+UI とネットワーク I/O は入っていない。
 
 ```shell
 swift test

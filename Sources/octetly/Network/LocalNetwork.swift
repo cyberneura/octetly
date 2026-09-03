@@ -11,6 +11,12 @@ struct LocalNetwork: Sendable {
     let address: String
     let netmask: String
     let macAddress: String?
+    /// This interface's own IPv6 addresses.
+    ///
+    /// Used to recognise this Mac's own answer to the all-nodes multicast probe, which it makes
+    /// like any other node on the segment. `ScanEngine.discoverIPv6` has what that recognition is
+    /// for.
+    let ipv6Addresses: [String]
 
     /// The interface's own network, e.g. 192.168.34.101/22.
     var cidr: String {
@@ -34,7 +40,8 @@ struct LocalNetwork: Sendable {
 
             let name = String(cString: entry.pointee.ifa_name)
             let network = LocalNetwork(interface: name, address: address, netmask: netmask,
-                                       macAddress: hardwareAddress(of: name, from: first))
+                                       macAddress: hardwareAddress(of: name, from: first),
+                                       ipv6Addresses: ipv6Addresses(of: name, from: first))
             guard network.autoRange != nil else { continue }
             return network
         }
@@ -84,10 +91,27 @@ struct LocalNetwork: Sendable {
         return nil
     }
 
+    /// This interface's IPv6 addresses, which arrive as further AF_INET6 entries in the same list
+    /// rather than alongside the AF_INET one.
+    private static func ipv6Addresses(of name: String,
+                                      from first: UnsafeMutablePointer<ifaddrs>) -> [String] {
+        var found: [String] = []
+        for entry in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            guard String(cString: entry.pointee.ifa_name) == name,
+                  let socketAddress = entry.pointee.ifa_addr,
+                  socketAddress.pointee.sa_family == UInt8(AF_INET6),
+                  let text = numericAddress(socketAddress),
+                  let address = IPv6.canonical(text) else { continue }
+            found.append(address)
+        }
+        return IPv6.routableFirst(found)
+    }
+
+    /// The pointer is passed through rather than copied: a sockaddr_in6 is 28 bytes and would lose
+    /// its second half to a sockaddr-sized local.
     private static func numericAddress(_ socketAddress: UnsafePointer<sockaddr>) -> String? {
-        var address = socketAddress.pointee
         var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-        let result = getnameinfo(&address, socklen_t(address.sa_len), &buffer,
+        let result = getnameinfo(socketAddress, socklen_t(socketAddress.pointee.sa_len), &buffer,
                                  socklen_t(buffer.count), nil, 0, NI_NUMERICHOST)
         return result == 0 ? IPv4.decodedCString(buffer) : nil
     }

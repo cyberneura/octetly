@@ -3,7 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var scanner: NetworkScanner
     @State private var editingRanges = false
-    @State private var sortOrder = [KeyPathComparator(\Device.addressValue)]
+    @State private var sortOrder = [KeyPathComparator(\Device.addressOrder)]
     @State private var searchText = ""
     @State private var renamingID: Device.ID?
     /// Trails scanner.progress so growth can be animated and a reset cannot be.
@@ -90,10 +90,19 @@ struct ContentView: View {
             }
             .width(min: 180, ideal: 240)
 
-            TableColumn("IP Address", value: \.addressValue) { device in
-                Text(device.ipv4).font(.body.monospaced())
+            // A host found over IPv6 alone is shown at its IPv6 address rather than at a blank,
+            // which is what makes it one row among the others instead of a list of its own. That
+            // address is two and a half times as long as a dotted quad, so the middle of it is
+            // what gets dropped when the column is narrow: the prefix and the zone are the halves
+            // that tell two of them apart.
+            TableColumn("IP Address", value: \.addressOrder) { device in
+                Text(device.displayAddress)
+                    .font(.body.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(device.displayAddress)
             }
-            .width(min: 110, ideal: 130)
+            .width(min: 120, ideal: 190)
 
             TableColumn("MAC Address", value: \.macAddress) { device in
                 Text(device.macAddress).font(.body.monospaced()).foregroundStyle(.secondary)

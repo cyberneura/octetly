@@ -22,11 +22,13 @@ struct DeviceIdentity: Sendable, Hashable {
 struct ScanProgress: Sendable {
     enum Phase: Sendable {
         case probing
+        case probingIPv6
         case scanningPorts
 
         var label: String {
             switch self {
             case .probing: "Probing"
+            case .probingIPv6: "Probing IPv6"
             case .scanningPorts: "Scanning ports"
             }
         }
@@ -44,8 +46,8 @@ enum ScanEvent: Sendable {
     case progress(ScanProgress)
     /// Addresses found so far, carrying only what discovery itself knows.
     case devices([Device])
+    /// Keyed by `Device.id`, which is an IPv6 address for a host that has no IPv4 one.
     case identity(String, DeviceIdentity)
-    case neighbours([String: String])
     case ports(String, Set<Int>)
     case finished(ScanSnapshot)
 }
@@ -73,6 +75,18 @@ enum ScanEngine {
     private static let latencyPacing: TimeInterval = 0.002
     private static let latencyReplyTimeout: TimeInterval = 0.4
 
+    // One packet reaches the whole segment, so a round costs one send and the wait for its replies
+    // rather than anything proportional to the range: five rounds are five packets and five
+    // seconds whether the target is a /24 or a /16.
+    //
+    // Five because a round keeps paying for longer than it looks like it should: left to run on
+    // the Wi-Fi segment this was written on, the rounds added 55, +5, +1, +1, +1, +0. Stopping at
+    // the first round that added nothing new was tried and gives up too early — on that segment it
+    // fired on the third round, and the counts a whole scan reported were 58 and 59 with it
+    // against 67 without.
+    private static let ipv6Rounds = 5
+    private static let ipv6ReplyTimeout: TimeInterval = 1.0
+
     static func events(
         range: ScanRange,
         vendorDatabase: OUIDatabase,
@@ -89,20 +103,6 @@ enum ScanEngine {
         }
     }
 
-    static func parseARP(_ output: String) -> [String: String] {
-        var result: [String: String] = [:]
-        let expression = try? NSRegularExpression(pattern: #"\((\d+\.\d+\.\d+\.\d+)\) at ([0-9a-fA-F:]+)"#)
-        for line in output.split(separator: "\n") {
-            let text = String(line)
-            let range = NSRange(text.startIndex..., in: text)
-            guard let match = expression?.firstMatch(in: text, range: range), match.numberOfRanges == 3,
-                  let ipRange = Range(match.range(at: 1), in: text),
-                  let macRange = Range(match.range(at: 2), in: text) else { continue }
-            result[String(text[ipRange])] = normalizeMAC(String(text[macRange]))
-        }
-        return result
-    }
-
     private static func scan(
         range: ScanRange,
         vendorDatabase: OUIDatabase,
@@ -111,7 +111,7 @@ enum ScanEngine {
     ) async {
         let hosts = range.addressList()
         let network = LocalNetwork.current()
-        var live = Set<String>()
+        var answered = Set<String>()
         var latencies: [String: Double] = [:]
         var devices: [String: Device] = [:]
         emit(.progress(ScanProgress(phase: .probing, completed: 0, total: hosts.count)))
@@ -131,15 +131,18 @@ enum ScanEngine {
             let pinger = ICMPPinger()
             var pending = hosts
 
-            /// Takes everything a sweep found all the way to the screen: rows, latencies, and the
-            /// queue that names them. Every place replies arrive goes through here, so none can
-            /// collect them and stop halfway.
+            /// Takes what a discovery sweep found all the way to the screen: rows, latencies, and
+            /// the queue that names them. Every sweep that can turn up an address nobody has seen
+            /// goes through here, so none can collect one and stop halfway. The timing pass after
+            /// discovery does not — it re-probes addresses that are already rows, and hands its
+            /// own responders to `answered` for the final merge to pick up.
             func record(_ found: SweepResult) async {
                 guard !found.responded.isEmpty else { return }
-                live.formUnion(found.responded)
+                answered.formUnion(found.responded)
                 latencies.merge(found.latencies) { existing, _ in existing }
-                let arp = await arpTable()
+                let arp = await arpTable().entries
                 let added = merge(found.responded, arp: arp, latencies: latencies,
+                                  answered: answered, localAddress: network?.address,
                                   vendorDatabase: vendorDatabase, into: &devices)
                 emit(.devices(ordered(devices)))
                 for address in added { enqueue.yield(address) }
@@ -156,18 +159,18 @@ enum ScanEngine {
                 for start in stride(from: 0, to: pending.count, by: windowSize) {
                     guard !Task.isCancelled else { break }
                     let window = pending[start..<min(start + windowSize, pending.count)]
-                    var answered: SweepResult
+                    var found: SweepResult
                     if let pinger {
-                        answered = await sweep(pinger) {
+                        found = await sweep(pinger) {
                             $0.probe(window, timeout: windowReplyTimeout, pacing: pacing)
                         }
                     } else {
                         // Only reached where the ICMP socket could not be opened at all.
-                        answered = await pingFallback(window, concurrency: settings.deviceConcurrency)
+                        found = await pingFallback(window, concurrency: settings.deviceConcurrency)
                     }
                     // A multi-homed host answers from whichever address its routing table picks,
                     // which can be one that was never probed and outside the range being scanned.
-                    await record(answered.filter(range.contains))
+                    await record(found.filter(range.contains))
                     emit(.progress(ScanProgress(phase: .probing, completed: window.endIndex,
                                                 total: pending.count, pass: pass)))
                 }
@@ -175,30 +178,32 @@ enum ScanEngine {
                 guard !Task.isCancelled else { break }
                 if let pinger {
                     // Recorded the same way as a window's own replies. A host that answers only
-                    // during this wait used to reach `live` and nothing else until the final
+                    // during this wait used to reach `answered` and nothing else until the final
                     // merge, so it stayed off screen for the remaining rounds — and vanished
                     // altogether if the scan was stopped first, since that merge is skipped.
                     await record(await sweep(pinger) { $0.drain(for: finalReplyTimeout) }
                         .filter(range.contains))
                 }
-                pending = pending.filter { !live.contains($0) }
+                pending = pending.filter { !answered.contains($0) }
             }
 
             // The burst that finds hosts also inflates their round-trip times, because hundreds
             // of requests are outstanding at once (ICMPPinger carries the figures). One spaced
             // pass over only the hosts that answered costs a fraction of a second and gives a
             // number comparable to what ping(8) reports for the same host.
-            if let pinger, !live.isEmpty, !Task.isCancelled {
-                let sorted = live.sorted()
+            if let pinger, !answered.isEmpty, !Task.isCancelled {
+                let sorted = answered.sorted()
                 let measured = await sweep(pinger) {
                     $0.probe(sorted, timeout: latencyReplyTimeout, pacing: latencyPacing)
                 }
-                // A host that stayed silent through every round can answer here, either late or
-                // because this pass is the first probe it did not lose. Folding the responders
-                // back into `live` is what gets it a row at all; without it the address is only
-                // in `measured` and nothing downstream looks there.
+                // This pass only sends to hosts that already answered, so a new address turning up
+                // in it came from somewhere else: a late reply to an earlier round landing in this
+                // one's drain, or a reply to another process's request, which EchoPinger explains
+                // this socket is handed too. Either way, folding the responders back into
+                // `answered` is what gets it a row — the ARP merge below builds its list from that
+                // set, so an address only in `measured` would have nothing look for it.
                 let timed = measured.filter(range.contains)
-                live.formUnion(timed.responded)
+                answered.formUnion(timed.responded)
                 latencies.merge(timed.latencies) { _, fresh in fresh }
                 for (address, milliseconds) in latencies {
                     devices[address]?.latencyMilliseconds = milliseconds
@@ -206,30 +211,39 @@ enum ScanEngine {
                 emit(.devices(ordered(devices)))
             }
 
-            // Hosts that never answered but are in the neighbour cache anyway, plus this Mac.
+            // Hosts that never answered but are in the ARP cache anyway, plus this Mac. A host
+            // that drops every echo request still answers the address resolution the kernel does
+            // on the way to one, because that is handled below whatever is filtering ICMP.
+            var arpWasComplete = false
             if !Task.isCancelled {
-                var arp = await arpTable()
-                live.formUnion(arp.keys.filter(range.contains))
-                if let network, range.contains(network.address) {
-                    live.insert(network.address)
-                    // A machine does not ARP itself, so its own row would be the one row with no
-                    // MAC and no vendor — while the sidebar shows both, from the same interface.
-                    if let mac = network.macAddress { arp[network.address] = mac }
-                }
-                let added = merge(live, arp: arp, latencies: latencies,
-                                  vendorDatabase: vendorDatabase, into: &devices)
+                let (arp, complete) = await arpTable()
+                arpWasComplete = complete
+                var present = answered.union(arp.keys.filter(range.contains))
+                if let network, range.contains(network.address) { present.insert(network.address) }
+                // This Mac needs nothing done for it here. macOS keeps a permanent ARP entry for
+                // the interface's own address — `192.168.34.101  6:34:e9:28:91:d  (none) (none)`
+                // — so its MAC and vendor arrive the same way every other row's do.
+                let added = merge(present, arp: arp, latencies: latencies, answered: answered,
+                                  localAddress: network?.address, vendorDatabase: vendorDatabase,
+                                  into: &devices)
                 emit(.devices(ordered(devices)))
                 for address in added { enqueue.yield(address) }
+            }
+
+            // Skipped where the ARP read above was cut short. The IPv6 merge matches replies to
+            // existing rows by hardware address, so rows the torn read left without one would not
+            // be recognised, and every host behind them would get a second row.
+            if !Task.isCancelled, arpWasComplete, let network {
+                let added = await discoverIPv6(on: network, vendorDatabase: vendorDatabase,
+                                               devices: &devices, emit: emit)
+                for id in added { enqueue.yield(id) }
             }
             enqueue.finish()
         }
 
         guard !Task.isCancelled else { return }
-        // ndp reports the whole neighbour table at once, so it is read here rather than per host,
-        // and after the sweep because that is what populated it.
-        emit(.neighbours(await neighbourTable()))
 
-        let targets = ordered(devices).map(\.ipv4)
+        let targets = ordered(devices).map { (id: $0.id, address: $0.reachableAddress) }
         if settings.portScanMode == .afterScan, !targets.isEmpty {
             await scanPorts(targets, settings: settings, emit: emit)
         }
@@ -238,13 +252,149 @@ enum ScanEngine {
         emit(.finished(ScanSnapshot(range: range, network: network)))
     }
 
+    // MARK: - IPv6
+
+    /// Finds hosts over IPv6 and folds them into the list.
+    ///
+    /// Runs after the IPv4 half rather than beside it, and the order is load-bearing. A row is
+    /// keyed by its IPv4 address wherever it has one, so a host that answers on both families has
+    /// to already be on the list under that address by the time its IPv6 reply arrives. Probing
+    /// the other way round would give it a second row, and folding the two together afterwards
+    /// would take a row away from under whoever had selected it.
+    ///
+    /// Returns the ids of the rows this added, for the naming queue.
+    private static func discoverIPv6(
+        on network: LocalNetwork,
+        vendorDatabase: OUIDatabase,
+        devices: inout [String: Device],
+        emit: @escaping @Sendable (ScanEvent) -> Void
+    ) async -> [String] {
+        guard let pinger = ICMPv6Pinger() else { return [] }
+
+        var responders = Set<String>()
+        for round in 1...ipv6Rounds {
+            guard !Task.isCancelled else { break }
+            emit(.progress(ScanProgress(phase: .probingIPv6, completed: round - 1,
+                                        total: ipv6Rounds, pass: round)))
+            responders.formUnion(await sweep(pinger) {
+                $0.probeAllNodes(on: network.interface, timeout: ipv6ReplyTimeout)
+            }.responded)
+        }
+        emit(.progress(ScanProgress(phase: .probingIPv6, completed: ipv6Rounds, total: ipv6Rounds)))
+        guard !Task.isCancelled else { return [] }
+
+        // Read after the sweep rather than before it. A run that read it first left 3 of its 57
+        // replies with no hardware address to match on; a run that read it afterwards had one for
+        // all 63. Those are two runs against a moving network, so what they settle is which order
+        // to prefer, not why — resolution the sweep provoked, neighbour discovery happening
+        // anyway, and entries that were already there cannot be told apart from here.
+        //
+        // Limited to the interface the probe went out on. ndp(8) reports every interface at once,
+        // including this Mac's own awdl0 and llw0 entries and whatever a VPN left behind, and a
+        // neighbour on one of those cannot be what answered a probe sent on this one.
+        //
+        // A read that did not finish is refused rather than used. Below, a reply the table has no
+        // entry for is taken to be a machine nothing else has seen, and half a table would answer
+        // that for every host the read stopped short of — one duplicate row each.
+        //
+        // An empty table is refused on the same reasoning rather than on a claim about when one
+        // can occur. Hosts answered this segment a moment ago; a cache with nothing in it for the
+        // interface they answered on is a cache that cannot be matched against, and stopping is
+        // the option that does not invent rows.
+        guard let table = await neighbourTable(on: network.interface), !table.isEmpty else {
+            return []
+        }
+
+        // This Mac answers the all-nodes group like any other node on the segment. ndp(8) does
+        // list its own interface — `fe80::…%en0 … en0 permanent R` — so the MAC below would match
+        // it to a row, but only to whichever row already holds this Mac's hardware address, and
+        // there is none when the target does not cover this Mac. Handling it here keeps a scan of
+        // some other segment from turning up the machine running it.
+        let ownAddresses = Set(network.ipv6Addresses)
+
+        var idByMAC: [String: String] = [:]
+        for (id, device) in devices where device.hasMACAddress { idByMAC[device.macAddress] = id }
+
+        var added: [String] = []
+        for address in responders.sorted() {
+            if ownAddresses.contains(address) {
+                // This Mac's row is the IPv4 one the sweep already made. Where the target does not
+                // cover this Mac there is no row for it, and its own reply is not a discovery — a
+                // scan of some other segment should not turn up the machine running it.
+                devices[network.address]?.add(ipv6: [address])
+                devices[network.address]?.discovery.insert(.icmpv6Echo)
+                continue
+            }
+
+            // The hardware address is the only thing that says whether this reply is a machine
+            // already on the list, and one reply in the cache is not guaranteed just because the
+            // cache has entries — a host answers a multicast probe without the kernel having had
+            // to resolve it individually. A reply with no entry is taken at face value and gets a
+            // row of its own, because losing it would lose exactly the host this sweep exists to
+            // find. That a whole ndp(8) failure cannot arrive here is what the guard above buys.
+            let mac = table.mac(for: address)
+            let addresses = mac.map(table.addresses(for:)) ?? [address]
+
+            if let mac, let existing = idByMAC[mac], var device = devices[existing] {
+                device.add(ipv6: addresses)
+                device.discovery.insert(.icmpv6Echo)
+                devices[existing] = device
+                continue
+            }
+
+            var device = Device(ipv6: address, macAddress: mac ?? "—",
+                                vendor: mac.map(vendorDatabase.vendor(for:)) ?? OUIDatabase.unknownVendor,
+                                discovery: [.icmpv6Echo])
+            device.add(ipv6: addresses)
+            devices[device.id] = device
+            if let mac { idByMAC[mac] = device.id }
+            added.append(device.id)
+        }
+
+        // Addresses for rows that did not answer the multicast probe. This is all the neighbour
+        // cache is ever used for on its own — see NeighbourCache on why it does not get to say a
+        // device exists.
+        for (id, device) in devices where device.hasMACAddress {
+            let addresses = table.addresses(for: device.macAddress)
+            guard !addresses.isEmpty else { continue }
+            devices[id]?.add(ipv6: addresses)
+            devices[id]?.discovery.insert(.ndpCache)
+        }
+        // This Mac's own addresses come from the interface rather than from anyone's cache.
+        devices[network.address]?.add(ipv6: network.ipv6Addresses)
+
+        // The multicast rounds produce no usable round-trip time (ICMPv6Pinger says why), so the
+        // rows with no IPv4 address to have been timed on get one spaced pass of their own. It is
+        // a few dozen packets at most. Each is probed at the address it answered from, which is
+        // its id, rather than at whichever of its addresses reads best in the table.
+        //
+        // On a socket of its own, with an identifier that cannot equal the sweep's, so that a
+        // reply to one of the multicast rounds arriving late cannot be picked up here and timed
+        // against what this pass just sent to that address.
+        let ipv6Only = devices.values.filter { $0.ipv4 == nil }.map(\.id).sorted()
+        if !ipv6Only.isEmpty, !Task.isCancelled,
+           let timer = ICMPv6Pinger(identifier: ICMPv6Pinger.identifier(after: pinger.currentIdentifier)) {
+            let timed = await sweep(timer) {
+                $0.probe(ipv6Only, timeout: latencyReplyTimeout, pacing: latencyPacing)
+            }
+            for (address, milliseconds) in timed.latencies {
+                devices[address]?.latencyMilliseconds = milliseconds
+            }
+        }
+
+        emit(.devices(ordered(devices)))
+        return added
+    }
+
+    // MARK: - Sweeps
+
     /// Runs one blocking sweep, with Stop wired through to it.
     ///
     /// The pinger's loops run on BlockingWork, where Task.isCancelled reads false, so cancelling
     /// the scan cannot stop them on its own. A paced pass spends seconds inside a single call.
-    private static func sweep(
-        _ pinger: ICMPPinger,
-        _ body: @escaping @Sendable (ICMPPinger) -> SweepResult
+    private static func sweep<Pinger: EchoPinger>(
+        _ pinger: Pinger,
+        _ body: @escaping @Sendable (Pinger) -> SweepResult
     ) async -> SweepResult {
         await withTaskCancellationHandler {
             await BlockingWork.run { body(pinger) }
@@ -255,19 +405,19 @@ enum ScanEngine {
 
     /// Consumes addresses as discovery finds them, keeping `concurrency` lookups in flight.
     private static func resolveNames(
-        _ addresses: AsyncStream<String>,
+        _ identifiers: AsyncStream<String>,
         concurrency: Int,
         emit: @escaping @Sendable (ScanEvent) -> Void
     ) async {
         await withTaskGroup(of: Void.self) { group in
             var running = 0
-            for await address in addresses {
+            for await id in identifiers {
                 if running >= max(1, concurrency) {
                     await group.next()
                     running -= 1
                 }
                 group.addTask {
-                    emit(.identity(address, await identity(of: address)))
+                    emit(.identity(id, await identity(of: id)))
                 }
                 running += 1
             }
@@ -275,7 +425,7 @@ enum ScanEngine {
     }
 
     private static func scanPorts(
-        _ targets: [String],
+        _ targets: [(id: String, address: String)],
         settings: ScanSettings,
         emit: @escaping @Sendable (ScanEvent) -> Void
     ) async {
@@ -287,38 +437,56 @@ enum ScanEngine {
         await withTaskGroup(of: (String, Set<Int>).self) { group in
             var index = 0
             while index < min(inFlight, targets.count) {
-                let host = targets[index]
-                group.addTask { (host, await PortScanner.openPorts(host: host)) }
+                let target = targets[index]
+                group.addTask { (target.id, await PortScanner.openPorts(host: target.address)) }
                 index += 1
             }
-            while let (address, open) = await group.next() {
+            while let (id, open) = await group.next() {
                 completed += 1
-                emit(.ports(address, open))
+                emit(.ports(id, open))
                 emit(.progress(ScanProgress(phase: .scanningPorts, completed: completed, total: targets.count)))
                 guard !Task.isCancelled else {
                     group.cancelAll()
                     break
                 }
                 if index < targets.count {
-                    let host = targets[index]
-                    group.addTask { (host, await PortScanner.openPorts(host: host)) }
+                    let target = targets[index]
+                    group.addTask { (target.id, await PortScanner.openPorts(host: target.address)) }
                     index += 1
                 }
             }
         }
     }
 
+    // MARK: - Assembling the list
+
     /// Adds anything not already known and returns just those addresses.
+    ///
+    /// `answered` is what separates a host that replied to an echo request from one the kernel
+    /// merely resolved an address for on the way to sending it. Both are on this segment; only
+    /// the first is reachable in the way the Ping column implies.
+    ///
+    /// `localAddress` is applied here rather than once at the end so that this Mac's row carries
+    /// its badge from the first window it appears in. Marking it only after the final merge left
+    /// the machine running the scan looking like any other host for the ten seconds the sweep
+    /// takes, and unmarked altogether if the scan was stopped before then.
     private static func merge(
         _ addresses: some Sequence<String>,
         arp: [String: String],
         latencies: [String: Double],
+        answered: Set<String>,
+        localAddress: String?,
         vendorDatabase: OUIDatabase,
         into devices: inout [String: Device]
     ) -> [String] {
         var added: [String] = []
         for address in addresses {
             let mac = arp[address]
+            var sources: Set<DiscoverySource> = []
+            if answered.contains(address) { sources.insert(.icmpEcho) }
+            if mac != nil { sources.insert(.arpCache) }
+            if address == localAddress { sources.insert(.thisMac) }
+
             if var existing = devices[address] {
                 var changed = false
                 if !existing.hasMACAddress, let mac {
@@ -330,6 +498,10 @@ enum ScanEngine {
                     existing.latencyMilliseconds = latency
                     changed = true
                 }
+                if !sources.isSubset(of: existing.discovery) {
+                    existing.discovery.formUnion(sources)
+                    changed = true
+                }
                 if changed { devices[address] = existing }
                 continue
             }
@@ -337,7 +509,8 @@ enum ScanEngine {
                 ipv4: address,
                 macAddress: mac ?? "—",
                 vendor: mac.map(vendorDatabase.vendor(for:)) ?? OUIDatabase.unknownVendor,
-                latencyMilliseconds: latencies[address]
+                latencyMilliseconds: latencies[address],
+                discovery: sources
             )
             added.append(address)
         }
@@ -345,7 +518,7 @@ enum ScanEngine {
     }
 
     private static func ordered(_ devices: [String: Device]) -> [Device] {
-        devices.values.sorted { $0.addressValue < $1.addressValue }
+        devices.values.sorted { $0.addressOrder < $1.addressOrder }
     }
 
     private static func pingFallback(_ batch: ArraySlice<String>, concurrency: Int) async -> SweepResult {
@@ -377,31 +550,62 @@ enum ScanEngine {
         return Double(output[range].dropFirst("time=".count))
     }
 
-    private static func arpTable() async -> [String: String] {
-        parseARP(await CommandRunner.run("/usr/sbin/arp", ["-an"], timeout: 2))
+    /// `-l` rather than plain `-an`: the freshness of an entry is only in that form, and
+    /// NeighbourCache says why reading it matters.
+    ///
+    /// A torn read is still used — half the entries is better than none for filling rows in — but
+    /// the caller is told, because the IPv6 merge downstream reads a missing MAC as meaning the
+    /// host is new and would give one a duplicate row.
+    private static func arpTable() async -> (entries: [String: String], complete: Bool) {
+        let result = await CommandRunner.runChecked("/usr/sbin/arp", ["-anl"], timeout: 2)
+        return (NeighbourCache.parseARP(result.output), result.completed)
     }
 
-    private static func neighbourTable() async -> [String: String] {
-        var result: [String: String] = [:]
-        let output = await CommandRunner.run("/usr/sbin/ndp", ["-an"], timeout: 3)
-        for line in output.split(separator: "\n") {
-            let fields = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-            guard fields.count >= 2, fields[1].contains(":") else { continue }
-            let mac = normalizeMAC(fields[1])
-            let address = fields[0].trimmingCharacters(in: CharacterSet(charactersIn: "()"))
-            // Keep the first entry per MAC: link-local addresses sort ahead of the routable ones
-            // and are the reliable half of what ndp reports on a LAN.
-            if result[mac] == nil { result[mac] = address }
-        }
-        return result
+    /// ndp reports the whole neighbour table at once, so it is read per scan rather than per host.
+    ///
+    /// nil where the command did not finish. Everything downstream reads a missing entry as
+    /// meaning something — that this reply is from a machine nothing else has seen — so half a
+    /// table is worse than none: it would answer that for every host the read was cut short of.
+    private static func neighbourTable(on interface: String) async -> NeighbourTable? {
+        let result = await CommandRunner.runChecked("/usr/sbin/ndp", ["-an"], timeout: 3)
+        guard result.completed else { return nil }
+        return NeighbourCache.parseNDP(result.output, interface: interface)
     }
+
+    // MARK: - Naming
 
     private static func identity(of address: String) async -> DeviceIdentity {
+        // dig(1) asks the configured unicast resolver, and no link-local address has a delegation
+        // in ip6.arpa for it to find, so the whole child process can only ever come back empty for
+        // one. getnameinfo goes through the system resolver instead, which asks mDNSResponder, and
+        // that does answer for a host on this segment.
+        guard IPv4.number(address) != nil else {
+            return DeviceIdentity(mdnsName: await BlockingWork.run { systemName(of: address) })
+        }
         async let names = reverseNames(address)
         async let smb = smbIdentity(address)
         let (resolved, share) = await (names, smb)
         return DeviceIdentity(dnsName: resolved.dns, mdnsName: resolved.mdns,
                               smbName: share.name, smbDomain: share.domain)
+    }
+
+    /// What the system resolver calls an IPv6 address, or "—".
+    ///
+    /// Measured at 200–300 ms for a host with an mDNS name and a flat 5 s for one without, which
+    /// is the timeout mDNSResponder gives up after. That is why this is paced by the same setting
+    /// as the child processes rather than run over every row at once.
+    private static func systemName(of address: String) -> String {
+        guard var socketAddress = IPv6.socketAddress(address) else { return "—" }
+        var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        let result = withUnsafePointer(to: &socketAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { generic in
+                getnameinfo(generic, socklen_t(MemoryLayout<sockaddr_in6>.size), &buffer,
+                            socklen_t(buffer.count), nil, 0, NI_NAMEREQD)
+            }
+        }
+        guard result == 0 else { return "—" }
+        let name = IPv4.decodedCString(buffer).trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        return name.isEmpty ? "—" : name
     }
 
     private static func reverseNames(_ address: String) async -> (dns: String, mdns: String) {
@@ -421,9 +625,5 @@ enum ScanEngine {
             if value[0].localizedCaseInsensitiveContains("workgroup") || value[0].localizedCaseInsensitiveContains("domain") { domain = value[1] }
         }
         return (name, domain)
-    }
-
-    private static func normalizeMAC(_ value: String) -> String {
-        value.split(separator: ":").map { $0.count == 1 ? "0\($0)" : String($0) }.joined(separator: ":").uppercased()
     }
 }

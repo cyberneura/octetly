@@ -69,12 +69,10 @@ final class NetworkScanner {
                     status = label(for: value)
                 case .devices(let list):
                     merge(discovered: list)
-                case .identity(let address, let identity):
-                    apply(identity, to: address)
-                case .neighbours(let table):
-                    applyNeighbours(table)
-                case .ports(let address, let open):
-                    apply(ports: open, to: address)
+                case .identity(let id, let identity):
+                    apply(identity, to: id)
+                case .ports(let id, let open):
+                    apply(ports: open, to: id)
                 case .finished(let snapshot):
                     finish(snapshot)
                 }
@@ -132,7 +130,7 @@ final class NetworkScanner {
               devices[index].portScanState != .done else { return }
 
         devices[index].portScanState = .scanning
-        let address = devices[index].ipv4
+        let address = devices[index].reachableAddress
         portTasks[id] = Task {
             let open = await PortScanner.openPorts(host: address)
             // Checked before touching portTasks: a cancelled task must not clear the entry a
@@ -140,7 +138,7 @@ final class NetworkScanner {
             // start and escape cancellation.
             guard !Task.isCancelled else { return }
             portTasks[id] = nil
-            apply(ports: open, to: address)
+            apply(ports: open, to: id)
         }
     }
 
@@ -156,8 +154,9 @@ final class NetworkScanner {
 
     // MARK: - Applying scan events
 
-    /// Discovery reports addresses, MACs, vendors and round-trip times. Names and ports arrive on
-    /// their own events, often earlier, and must survive a discovery update landing on top.
+    /// Discovery reports addresses, MACs, vendors, round-trip times and how each row was found.
+    /// Names and ports arrive on their own events, often earlier, and must survive a discovery
+    /// update landing on top.
     private func merge(discovered list: [Device]) {
         var byID = Dictionary(devices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for incoming in list {
@@ -172,6 +171,8 @@ final class NetworkScanner {
                     existing.macAddress = incoming.macAddress
                     existing.vendor = incoming.vendor
                 }
+                existing.add(ipv6: incoming.ipv6Addresses)
+                existing.discovery.formUnion(incoming.discovery)
                 byID[incoming.id] = existing
             } else {
                 byID[incoming.id] = incoming
@@ -180,8 +181,8 @@ final class NetworkScanner {
         publish(Array(byID.values))
     }
 
-    private func apply(_ identity: DeviceIdentity, to address: String) {
-        guard let index = devices.firstIndex(where: { $0.ipv4 == address }) else { return }
+    private func apply(_ identity: DeviceIdentity, to id: Device.ID) {
+        guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
         devices[index].dnsName = identity.dnsName
         devices[index].mdnsName = identity.mdnsName
         devices[index].smbName = identity.smbName
@@ -190,14 +191,8 @@ final class NetworkScanner {
         if identity.hostname != "—" { namedCount += 1 }
     }
 
-    private func applyNeighbours(_ table: [String: String]) {
-        for index in devices.indices where devices[index].hasMACAddress {
-            if let address = table[devices[index].macAddress] { devices[index].ipv6 = address }
-        }
-    }
-
-    private func apply(ports: Set<Int>, to address: String) {
-        guard let index = devices.firstIndex(where: { $0.ipv4 == address }) else { return }
+    private func apply(ports: Set<Int>, to id: Device.ID) {
+        guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
         devices[index].openPorts = ports
         devices[index].portScanState = .done
     }
@@ -213,15 +208,13 @@ final class NetworkScanner {
         // that is about to be shown, rather than in whichever merge branch happened to create
         // each row.
         annotations.consolidate(list)
-        let own = machine?.address
         devices = list
             .map { device in
                 var device = device
                 device.customName = annotations[device.annotationKey].name
-                device.isLocalMachine = device.ipv4 == own
                 return device
             }
-            .sorted { $0.addressValue < $1.addressValue }
+            .sorted { $0.addressOrder < $1.addressOrder }
         // Only once the scan is done. These lists are cumulative and partial — a host absent from
         // one of them may simply not have answered yet, and dropping the selection there would
         // close the detail pane on a device that turns up a moment later.
