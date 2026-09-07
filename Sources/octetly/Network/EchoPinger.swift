@@ -42,7 +42,11 @@ class EchoPinger: @unchecked Sendable {
     // replies to other processes' requests as well, which belong to no send of ours at all (see
     // SweepResult). Matching on the sequence number would fix the first two and not the third,
     // and would cost the row its Ping value in every case it could not resolve — so the number is
-    // the one available rather than the one proven.
+    // the one available rather than the one proven. `maximumRoundTrip` below bounds how wrong it
+    // may be in one direction only, and the other is left open: a reply to an earlier round that
+    // lands just after this sweep re-sent to the same address is timed against the re-send and
+    // comes out too *small*, which no ceiling can catch. That figure is wrong by tens of
+    // milliseconds where the one the ceiling catches was wrong by sixteen seconds.
     private var sentAt: [String: DispatchTime] = [:]
     private let stopLock = NSLock()
     private var stopped = false
@@ -83,6 +87,21 @@ class EchoPinger: @unchecked Sendable {
     /// `pacing` is the gap between sends. Zero saturates the socket, which a switched LAN absorbs;
     /// a tunnel or a rate-limited router does not, and drops most of the burst. The same host that
     /// is lost in a burst answers every time when probed on its own.
+    ///
+    /// `pacing` is waited out after each send, rather than each send waiting for its slot on a
+    /// schedule fixed at the start. The schedule was tried, to stop the sleep overshooting the time
+    /// budget: it asks for 25 ms and takes 28.5, for 10 and takes 12.0, for 396 µs and takes 526,
+    /// all measured here, so a /22 paced at 25 ms ran 29.0 s against a budget written as capping it
+    /// at 26. Against a fixed schedule the arithmetic came out exact — and the sends came out in
+    /// bursts. Every overshoot leaves the loop behind its schedule, and a loop behind its schedule
+    /// catches up the only way it can, by sending with no gap at all: 34 of the 253 gaps in a
+    /// measured /24 fell under the pacing, the shortest of them 0.0 ms.
+    ///
+    /// The two cannot both hold while the platform sleeps longer than it is asked. A budget in
+    /// wall-clock needs late sends to be made up; a floor under the interval between sends forbids
+    /// exactly that. What finds the hosts is the floor — that is the whole finding behind
+    /// `SweepProfile` — so the floor is what this keeps, and the budget is spent in requested sleep
+    /// rather than in wall-clock. `SweepProfile.pacingBudget` says what that costs.
     func probe(_ addresses: some Sequence<String>, timeout: TimeInterval,
                pacing: TimeInterval = 0) -> SweepResult {
         var result = SweepResult()
@@ -93,12 +112,27 @@ class EchoPinger: @unchecked Sendable {
             // window has gone out charges every round-trip time with the rest of the send loop.
             collect(into: &result)
             if pacing > 0 {
-                usleep(useconds_t(pacing * 1_000_000))
+                pause(pacing)
                 collect(into: &result)
             }
         }
         result.formUnion(drain(for: timeout))
         return result
+    }
+
+    /// Sleeps for `seconds`, finishing the interval when a signal cuts it short.
+    ///
+    /// `usleep` returns early on EINTR, and the floor under the interval between sends is the one
+    /// property this pass guarantees — a signal arriving mid-gap must not be able to turn two
+    /// paced sends into a burst of two. The same reasoning `drain` and `receiveDatagram` apply to
+    /// their own EINTR, and nanosleep hands back what is left of the interval to ask for again.
+    private func pause(_ seconds: TimeInterval) {
+        var request = timespec(tv_sec: Int(seconds),
+                               tv_nsec: Int((seconds - seconds.rounded(.down)) * 1_000_000_000))
+        var remaining = timespec()
+        while nanosleep(&request, &remaining) == -1, errno == EINTR {
+            request = remaining
+        }
     }
 
     func probeOne(_ address: String) {
@@ -164,10 +198,19 @@ class EchoPinger: @unchecked Sendable {
     }
 
     private func roundTrip(to address: String, at arrival: DispatchTime) -> Double? {
-        guard let sent = sentAt[address], arrival.uptimeNanoseconds >= sent.uptimeNanoseconds else {
-            return nil
-        }
-        return Double(arrival.uptimeNanoseconds - sent.uptimeNanoseconds) / 1_000_000
+        guard let sent = sentAt[address] else { return nil }
+        return Self.reportableRoundTrip(sentAt: sent, arrival: arrival)
+    }
+
+    /// The milliseconds between a send and a reply, or nil where that is not a measurement.
+    ///
+    /// Separate from the table it is normally looked up in so the rule can be exercised without a
+    /// socket: what it decides is what the Ping column shows, and the case it exists for took a
+    /// live VPN to produce.
+    static func reportableRoundTrip(sentAt: DispatchTime, arrival: DispatchTime) -> Double? {
+        guard arrival.uptimeNanoseconds >= sentAt.uptimeNanoseconds else { return nil }
+        let milliseconds = Double(arrival.uptimeNanoseconds - sentAt.uptimeNanoseconds) / 1_000_000
+        return milliseconds <= maximumRoundTrip * 1000 ? milliseconds : nil
     }
 
     // MARK: - Socket calls both sockets make the same way
@@ -229,4 +272,39 @@ class EchoPinger: @unchecked Sendable {
     /// How many times in a row a signal may interrupt one read before it gives up and lets the
     /// caller look at its deadline again.
     private static let interruptedRetryLimit = 16
+
+    /// The longest a reply may lag the send it is matched to and still be reported as that host's
+    /// round-trip time.
+    ///
+    /// The same 1.5 s that ScanEngine drains for, and independent of it: that deadline runs from
+    /// the start of a drain and this one from the last send to a given address, which on a paced
+    /// pass are seconds apart. Both came out of the same observation about when this network stops
+    /// answering; neither is derived from the other, and lengthening that drain would collect more
+    /// hosts rather than more figures.
+    ///
+    /// `sentAt` is keyed by address, so a reply nobody is waiting for any more is still matched to
+    /// whatever this sweep last sent there — and how wrong that can be is set by how long the send
+    /// loop runs. A burst puts all 254 sends inside about 11 ms, so the error stayed under the
+    /// reply window and never showed. A pass paced for a routed path spends seconds in the loop:
+    /// measured over a VPN-routed /24, a host that answers ping(8) in 80 ms reached the Ping column
+    /// at 16,419.9 ms, which was the duration of the sweep rather than of any round trip.
+    ///
+    /// This is a bound on what is worth showing, not a proof that anything past it is stale, and it
+    /// is one-sided: it refuses a figure too large to be a round trip and has nothing to say about
+    /// one too small, which `sentAt` above describes. A
+    /// paced pass does keep collecting during its send loop, so a genuinely slow host near the
+    /// front of one can answer later than this and be refused — the cost of that is a blank Ping
+    /// column, which the timing pass then fills, against a figure that is wrong by a factor of a
+    /// hundred and looks like a fact. Nothing measured here comes close to the limit: routed hosts
+    /// answer in 13–360 ms and hosts on a switch in single digits.
+    ///
+    /// Not taken from the timeout of the call in hand, which is the other tempting bound and is
+    /// wrong. Discovery gives `probe` 50 ms to wait after a window's sends have gone out, and that
+    /// is how long the sweep pauses between windows rather than a claim about how fast a host can
+    /// answer: using it threw away every genuine routed measurement during discovery, since those
+    /// run to 80 ms and beyond.
+    ///
+    /// A refused reply still counts as an answer — it says the host is there, which is what the row
+    /// is asking. Only the number is dropped.
+    static let maximumRoundTrip: TimeInterval = 1.5
 }

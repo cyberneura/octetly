@@ -24,6 +24,16 @@ struct LocalNetwork: Sendable {
         return "\(address)/\(mask.nonzeroBitCount)"
     }
 
+    /// Every address on this interface's own link, network and broadcast included.
+    ///
+    /// The bounds rather than the host range, because what reads this is asking whether an address
+    /// is reachable without a router — and the two edge addresses are as much on the link as any
+    /// other. SweepProfile is the caller.
+    var linkRange: (first: UInt32, last: UInt32)? {
+        guard let ip = IPv4.number(address), let mask = IPv4.number(netmask) else { return nil }
+        return (ip & mask, (ip & mask) | ~mask)
+    }
+
     static func current() -> LocalNetwork? {
         var pointer: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&pointer) == 0, let first = pointer else { return nil }
