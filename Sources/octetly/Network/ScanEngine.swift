@@ -7,14 +7,23 @@ struct ScanSnapshot: Sendable {
 }
 
 struct DeviceIdentity: Sendable, Hashable {
-    var dnsName = "—"
-    var mdnsName = "—"
-    var smbName = "—"
-    var smbDomain = "—"
+    var dnsName = DNSName.none
+    var mdnsName = DNSName.none
+    var smbName = DNSName.none
+    var smbDomain = DNSName.none
 
+    /// The one name the row shows.
+    ///
+    /// The configured resolver comes first, because a name it holds says something about the
+    /// network the host is on and not only about the host. A `.local` one is the exception: that is
+    /// an mDNS claim whoever relayed it, the host is the authority for its own, and where the two
+    /// disagree the host wins — otherwise a stale cache entry outranks the machine it names, and
+    /// the real name reaches only the detail pane, where nothing searches it. SMB is last: it is a
+    /// service name rather than a host name, and only some machines run one.
     var hostname: String {
-        if dnsName != "—" { return dnsName }
-        if mdnsName != "—" { return mdnsName }
+        if dnsName != DNSName.none, !DNSName.isMulticast(dnsName) { return dnsName }
+        if mdnsName != DNSName.none { return mdnsName }
+        if dnsName != DNSName.none { return dnsName }
         return smbName
     }
 }
@@ -23,12 +32,14 @@ struct ScanProgress: Sendable {
     enum Phase: Sendable {
         case probing
         case probingIPv6
+        case timing
         case scanningPorts
 
         var label: String {
             switch self {
             case .probing: "Probing"
             case .probingIPv6: "Probing IPv6"
+            case .timing: "Timing"
             case .scanningPorts: "Scanning ports"
             }
         }
@@ -56,24 +67,27 @@ enum ScanEngine {
     private static let windowReplyTimeout: TimeInterval = 0.05
     // Generous because a routed or tunnelled target answers in tens of milliseconds rather than
     // the two or three of a host on the same switch, and replies trickle in rather than arriving
-    // together. This is spent in full on every pass — drain has no idle-gap exit — so it is
-    // three times this much of fixed cost per scan.
+    // together. This is spent in full on every pass — drain has no idle-gap exit — so a scan pays
+    // it once per pass it makes, which is up to three: the loop stops early once no address is
+    // still silent.
+    //
+    // `EchoPinger.maximumRoundTrip` happens to hold the same number and is deliberately not wired
+    // to this one, because the two measure from different moments: this deadline runs from the
+    // start of the drain, that one from the last send to a given address. On a paced pass those are
+    // seconds apart, so lengthening this would not buy a reply the right to be timed — it would buy
+    // more hosts, since a reply too old to time still says the host is there. They are equal
+    // because both came out of the same observation about when this network stops answering, not
+    // because either is derived from the other.
     private static let finalReplyTimeout: TimeInterval = 1.5
 
+    // How many attempts a silent address gets. The same for both sweep profiles: what differs
+    // between a switched LAN and a path through a router is how fast the requests may go out, not
+    // how many times it is worth asking, and on a range too small for a burst to congest anything
+    // a pass fewer is purely a pass fewer.
     private static let discoveryPasses = 3
 
-    // The first pass empties the socket as fast as it will take packets — 254 addresses in about
-    // 11 ms — which a switched LAN answers in full. A tunnelled or rate-limited path drops most
-    // of that burst (ICMPPinger carries the measurements), so the retries are spread out. The gap
-    // is derived from a time budget rather than fixed, because a fixed one that suits a /24 would
-    // put a /16 in the region of ten minutes.
-    private static let retryPacingBudget: TimeInterval = 3.0
-    private static let retryPacingCeiling: TimeInterval = 0.01
-
-    // Spacing for the timing pass. Only hosts that already answered are re-probed, so this is a
-    // few dozen packets rather than the whole range.
-    private static let latencyPacing: TimeInterval = 0.002
-    private static let latencyReplyTimeout: TimeInterval = 0.4
+    // How fast to send, and how to time what answered, are SweepProfile's — those do differ by an
+    // order of magnitude between the two.
 
     // One packet reaches the whole segment, so a round costs one send and the wait for its replies
     // rather than anything proportional to the range: five rounds are five packets and five
@@ -111,6 +125,7 @@ enum ScanEngine {
     ) async {
         let hosts = range.addressList()
         let network = LocalNetwork.current()
+        let profile = SweepProfile.forRange(range, on: network)
         var answered = Set<String>()
         var latencies: [String: Double] = [:]
         var devices: [String: Device] = [:]
@@ -133,9 +148,10 @@ enum ScanEngine {
 
             /// Takes what a discovery sweep found all the way to the screen: rows, latencies, and
             /// the queue that names them. Every sweep that can turn up an address nobody has seen
-            /// goes through here, so none can collect one and stop halfway. The timing pass after
-            /// discovery does not — it re-probes addresses that are already rows, and hands its
-            /// own responders to `answered` for the final merge to pick up.
+            /// goes through here, so none can collect one and stop halfway. The timing pass sends
+            /// only to addresses that are already rows, but the socket hands it replies to other
+            /// processes' requests too (see SweepResult), so it can hear from one nobody has seen
+            /// and it goes through here as well.
             func record(_ found: SweepResult) async {
                 guard !found.responded.isEmpty else { return }
                 answered.formUnion(found.responded)
@@ -148,10 +164,51 @@ enum ScanEngine {
                 for address in added { enqueue.yield(address) }
             }
 
+            /// Puts what the timing rounds have so far on the screen: their figures, and a row for
+            /// anything they heard from that has none.
+            ///
+            /// Both halves have to happen while the scan is still running. Stop skips the merge at
+            /// the end, and NetworkScanner stops applying events the moment it is cancelled, so a
+            /// figure or a row held back until after the rounds is one that never arrives — a Stop
+            /// pressed during the second round would otherwise leave the first round's hosts
+            /// showing the inflated reading it had just corrected.
+            ///
+            /// Takes the accumulated result rather than the round's own, so that which figure an
+            /// address keeps is decided in one place: `SweepResult.formUnion` keeps the first, and
+            /// the merge after the rounds keeps whatever that left. Applying each round's own on
+            /// top would show the later of two replies from the same host and then flip back to the
+            /// earlier one when the rounds ended.
+            ///
+            /// The figures are emitted before anything that can suspend. `record` waits on an ARP
+            /// read, and a Stop landing inside that wait would take the figures down with the row
+            /// it was fetching. It is called at all only where something answered that has no row
+            /// yet, because the wait is also time replies sit unread between one round's sends and
+            /// the next's — a reply is timed from the moment it is read (`EchoPinger.probe` says
+            /// why) — so paying it every round would add itself to the figures that follow.
+            func settle(_ timed: SweepResult) async {
+                latencies.merge(timed.latencies) { _, fresh in fresh }
+                // Only what this round actually moved. The accumulated result is handed over whole
+                // every round, so most of what it holds is already on the row it belongs to, and
+                // sorting every device and publishing it again on the main actor to say nothing is
+                // work the second round would do for free.
+                var changed = false
+                for (address, milliseconds) in timed.latencies {
+                    guard var device = devices[address],
+                          device.latencyMilliseconds != milliseconds else { continue }
+                    device.latencyMilliseconds = milliseconds
+                    devices[address] = device
+                    changed = true
+                }
+                if changed { emit(.devices(ordered(devices))) }
+                if timed.responded.contains(where: { devices[$0] == nil }) {
+                    await record(timed)
+                }
+            }
+
             for pass in 1...discoveryPasses {
                 guard !Task.isCancelled, !pending.isEmpty else { break }
-                let windowSize = ICMPPinger.sendWindow(for: pending.count)
-                let pacing = pass == 1 ? 0 : min(retryPacingCeiling, retryPacingBudget / Double(pending.count))
+                let pacing = profile.pacing(pass: pass, pending: pending.count)
+                let windowSize = ICMPPinger.sendWindow(for: pending.count, pacing: pacing)
                 // Each pass counts its own remaining addresses, so it has to restart the bar.
                 // Without this the bar would sit at full for the whole of the paced retries.
                 emit(.progress(ScanProgress(phase: .probing, completed: 0, total: pending.count, pass: pass)))
@@ -187,24 +244,90 @@ enum ScanEngine {
                 pending = pending.filter { !answered.contains($0) }
             }
 
-            // The burst that finds hosts also inflates their round-trip times, because hundreds
-            // of requests are outstanding at once (ICMPPinger carries the figures). One spaced
-            // pass over only the hosts that answered costs a fraction of a second and gives a
-            // number comparable to what ping(8) reports for the same host.
+            // Whatever discovery reported is a reading taken while its own send loop had the path
+            // loaded, and both profiles inflate it in their own way: the burst keeps hundreds of
+            // requests outstanding at once, and a paced pass keeps the loop running for seconds
+            // (ICMPPinger and SweepProfile carry the figures). Re-probing only the hosts that
+            // answered, spaced out, is what makes the Ping column comparable to ping(8). On a LAN
+            // that is one pass costing a fraction of a second.
+            //
+            // Through a router it takes rounds: one spaced pass does not reach every host on a
+            // path that drops packets, and what a host it misses is left with is worth a second
+            // try — `SweepProfile.discardsUnmeasuredLatency` is where that is decided and has the
+            // figures. Each round asks only the hosts still without one, so the second is a handful
+            // of packets, and formUnion keeps what a round already produced rather than replacing
+            // it for no reason.
             if let pinger, !answered.isEmpty, !Task.isCancelled {
-                let sorted = answered.sorted()
-                let measured = await sweep(pinger) {
-                    $0.probe(sorted, timeout: latencyReplyTimeout, pacing: latencyPacing)
+                var timed = SweepResult()
+                var lastRound = 1
+                for round in 1...profile.latencyRounds {
+                    guard !Task.isCancelled else { break }
+                    // Wait out the window the last round gave up on before sending anything more.
+                    // A reply that missed it is still in flight, and `sentAt` is keyed by address:
+                    // collected here it is timed against the send it answers, which is the figure
+                    // it deserves, while collected after the next send it is timed against that one
+                    // and reported as a fraction of what it was — 170 ms for a 1.2 s round trip,
+                    // small enough that no ceiling can tell it from a fast host. Taking it here
+                    // also drops the address off this round's list, so the mismatch has nothing
+                    // left to happen to.
+                    if round > 1 {
+                        let late = await sweep(pinger) {
+                            $0.drain(for: profile.latencyReplyTimeout)
+                        }.filter(range.contains)
+                        timed.formUnion(late)
+                        await settle(timed)
+                    }
+                    let missing = answered.sorted().filter { timed.latencies[$0] == nil }
+                    guard !missing.isEmpty else { break }
+                    // Recorded here rather than at the top of the round, which is a round that has
+                    // committed to sending rather than one that has merely begun. The first is
+                    // always reached — `answered` is not empty and `timed` starts so — which is why
+                    // the initial 1 needs no guard of its own.
+                    lastRound = round
+                    // A phase of its own on the bar. Without one the last thing the bar heard was
+                    // discovery finishing at full, and this pass runs for seconds after that —
+                    // long enough on a wide routed range to look finished while it is still going,
+                    // which is when someone presses Stop and loses the rows the merge below has
+                    // not added yet.
+                    emit(.progress(ScanProgress(phase: .timing,
+                                                completed: answered.count - missing.count,
+                                                total: answered.count, pass: round)))
+                    // This pass only sends to hosts that already answered, so a new address turning
+                    // up in it came from somewhere else: a late reply to an earlier round landing
+                    // in this one's drain, or a reply to another process's request, which
+                    // EchoPinger explains this socket is handed too. `settle` is what turns one
+                    // into a row and into `answered`; the ARP merge at the end reads that set, so
+                    // an address that never reached it would also lose the badge saying an echo
+                    // came back from it.
+                    let gap = profile.latencyGap(targets: missing.count)
+                    let found = await sweep(pinger) {
+                        $0.probe(missing, timeout: profile.latencyReplyTimeout, pacing: gap)
+                    }.filter(range.contains)
+                    timed.formUnion(found)
+                    await settle(timed)
                 }
-                // This pass only sends to hosts that already answered, so a new address turning up
-                // in it came from somewhere else: a late reply to an earlier round landing in this
-                // one's drain, or a reply to another process's request, which EchoPinger explains
-                // this socket is handed too. Either way, folding the responders back into
-                // `answered` is what gets it a row — the ARP merge below builds its list from that
-                // set, so an address only in `measured` would have nothing look for it.
-                let timed = measured.filter(range.contains)
-                answered.formUnion(timed.responded)
+                // A host every round missed keeps nothing. What discovery left on it is a reading
+                // taken while its own send loop had the path loaded — 600 to 1,060 ms, measured,
+                // for hosts that answer in 25 — and that is wrong by a factor rather than by a
+                // margin. The rounds above exist because such a figure looks plausible enough to be
+                // read as fact; leaving it on the rows they could not reach would keep exactly the
+                // ones they were added for.
+                //
+                // Not when the pass was cut short, where `timed` is empty or partial through no
+                // finding of its own and every row would lose its figure for nothing, and not on a
+                // profile whose discovery bursts — `discardsUnmeasuredLatency` has why.
+                if profile.discardsUnmeasuredLatency, !Task.isCancelled {
+                    for address in answered where timed.latencies[address] == nil {
+                        latencies.removeValue(forKey: address)
+                        devices[address]?.latencyMilliseconds = nil
+                    }
+                }
                 latencies.merge(timed.latencies) { _, fresh in fresh }
+                // The round it actually reached, not the one it was allowed: a first round that
+                // measured every host breaks out of the second, and saying "round 2" then would
+                // report work that was never done.
+                emit(.progress(ScanProgress(phase: .timing, completed: answered.count,
+                                            total: answered.count, pass: lastRound)))
                 for (address, milliseconds) in latencies {
                     devices[address]?.latencyMilliseconds = milliseconds
                 }
@@ -374,8 +497,11 @@ enum ScanEngine {
         let ipv6Only = devices.values.filter { $0.ipv4 == nil }.map(\.id).sorted()
         if !ipv6Only.isEmpty, !Task.isCancelled,
            let timer = ICMPv6Pinger(identifier: ICMPv6Pinger.identifier(after: pinger.currentIdentifier)) {
+            // The LAN profile's figures whatever the IPv4 range was: these hosts answered an
+            // all-nodes probe on this interface, so they are on this Mac's own link by definition.
+            let gap = SweepProfile.onLink.latencyGap(targets: ipv6Only.count)
             let timed = await sweep(timer) {
-                $0.probe(ipv6Only, timeout: latencyReplyTimeout, pacing: latencyPacing)
+                $0.probe(ipv6Only, timeout: SweepProfile.onLink.latencyReplyTimeout, pacing: gap)
             }
             for (address, milliseconds) in timed.latencies {
                 devices[address]?.latencyMilliseconds = milliseconds
@@ -604,19 +730,91 @@ enum ScanEngine {
             }
         }
         guard result == 0 else { return "—" }
-        let name = IPv4.decodedCString(buffer).trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        // Through DNSName for the same reason dig's answers are: this is the resolver's
+        // presentation form, so a name with a byte that has no spelling arrives escaped here too.
+        let name = DNSName.decoded(IPv4.decodedCString(buffer))
         return name.isEmpty ? "—" : name
     }
 
+    /// What the configured resolver calls this address, and what the host itself does.
+    ///
+    /// The two queries run one after the other rather than together. On the networks measured here
+    /// the unicast one came back in 20–100 ms whether it had an answer or not, and its worst case
+    /// is the 2 s CommandRunner allows it, so what running them in series buys is worth more than
+    /// it costs: a row stays at two child processes in flight. Each parks a thread in BlockingWork,
+    /// and the sweep's own passes are parked in the same pool, so naming wider than it needs to be
+    /// is naming that delays discovery.
+    ///
+    /// The host is asked even when unicast DNS already returned a `.local` name. A suffix names a
+    /// namespace and not a source: `.local` can come out of a configured zone, a cache, or a relay,
+    /// none of which is evidence that the host answers to it now. So a relayed one is kept only as
+    /// what to show when the host itself says nothing.
     private static func reverseNames(_ address: String) async -> (dns: String, mdns: String) {
-        let output = await CommandRunner.run("/usr/bin/dig", ["+short", "-x", address], timeout: 2)
-        let dns = output.split(separator: "\n").first.map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: ".")) } ?? "—"
-        let mdns = dns.hasSuffix(".local") ? dns : "—"
-        return (dns.isEmpty ? "—" : dns, mdns)
+        let dns = await digName(["+short", "-x", address])
+        return (dns, DNSName.multicastName(dns: dns, responder: await responderName(address)))
     }
 
+    /// One dig(1) query, or "—" where it did not answer one.
+    ///
+    /// Checked rather than read, because the output is being taken for a host name and dig says
+    /// plenty on its way to failing: a server it cannot reach draws `;; connection timed out…`,
+    /// which `DNSName` filters, and a fatal one draws
+    /// `/usr/bin/dig: couldn't get address for '…': not found`, which it cannot — nothing marks
+    /// that as a diagnostic except that dig then exits non-zero. Measured: 0 for an answer and for
+    /// an empty one, 9 for a server that never replied.
+    private static func digName(_ arguments: [String]) async -> String {
+        let result = await CommandRunner.runChecked("/usr/bin/dig", arguments, timeout: 2)
+        guard result.completed else { return DNSName.none }
+        return DNSName.answer(in: result.output)
+    }
+
+    /// What the host's own mDNS responder calls itself, or "—".
+    ///
+    /// Asked of the host directly on port 5353 rather than through the system resolver. The
+    /// resolver does answer for `.local`, but the query it sends out is multicast, and multicast
+    /// does not cross a router — let alone a point-to-point tunnel. On a VPN-routed /24 measured
+    /// here, dig(1), dscacheutil(1) and host(1) came back empty for every address they were tried
+    /// on, while a unicast query to the host's own 5353 named 5 of those 7 and matched what LanScan
+    /// showed for the same hosts. A whole-range scan of the same /24 later named 8.
+    ///
+    /// **A responder is allowed to refuse this.** RFC 6762 §5.5 has it answer a direct unicast
+    /// query as it would a QU question, but SHOULD check that the source address shares a subnet
+    /// with one of its interfaces and silently ignore the query when it does not — which is exactly
+    /// the case being relied on here, since through a tunnel the source is this Mac's address on
+    /// the far side of it. So this is not something a router can be expected to make work in
+    /// general; it is that no responder met on any path measured here performed that check. The
+    /// cost when one does is the second the query waits before giving up, and a row named by
+    /// whatever else answered.
+    ///
+    /// One try is enough: 25 for 25 across five responders, because unlike the sweep this is a
+    /// single exchange with no burst for the path to drop.
+    ///
+    /// `+short` sits ahead of `-x` rather than after it, and that is not a style choice: written
+    /// after the query it belongs to it no longer suppresses the banner, so a silent host answers
+    /// with five lines instead of one. Anywhere before `-x` does — `@server -p 5353 +short -x …`
+    /// measures the same.
+    ///
+    /// Only `+short` behaves that way, and only when the query fails. `+timeout` and `+tries` were
+    /// written after `-x` for a long time and were working: measured at 1.03 s against a port
+    /// nothing listens on, where the defaults would have taken 15. So the rule is not the general
+    /// one about global options preceding their queries — it is about the banner, whose text is
+    /// settled when the first lookup is built. They lead here anyway, so that nothing about this
+    /// call depends on knowing which of its options is the exception.
+    private static func responderName(_ address: String) async -> String {
+        await digName(["+short", "+timeout=1", "+tries=1",
+                       "@\(address)", "-p", "5353", "-x", address])
+    }
+
+    /// Checked for the same reason the dig calls are, by a different route: smbutil finishes on its
+    /// own even when the host does not answer — measured, exit 0 with `Operation timed out: unable
+    /// to get status from …` — so what `completed` actually rules out here is CommandRunner's
+    /// watchdog killing it part way. The parse below reads whatever bytes arrived as whole lines,
+    /// and a read torn after `Server: PRIN` would name the host `PRIN`.
     private static func smbIdentity(_ address: String) async -> (name: String, domain: String) {
-        let output = await CommandRunner.run("/usr/bin/smbutil", ["status", address], timeout: 2)
+        let result = await CommandRunner.runChecked("/usr/bin/smbutil", ["status", address],
+                                                    timeout: 2)
+        guard result.completed else { return (DNSName.none, DNSName.none) }
+        let output = result.output
         var name = "—", domain = "—"
         for line in output.split(separator: "\n") {
             let value = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }

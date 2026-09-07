@@ -161,12 +161,14 @@ final class NetworkScanner {
         var byID = Dictionary(devices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for incoming in list {
             if var existing = byID[incoming.id] {
-                // Always taken, not filled in only when missing: the engine re-times every host
-                // in a spaced pass after the sweep, and keeping the first value would pin the
-                // column to the inflated figure the burst produced.
-                if let latency = incoming.latencyMilliseconds {
-                    existing.latencyMilliseconds = latency
-                }
+                // Taken as it comes, nil and all. The engine owns this field outright — names,
+                // ports and notes are what arrive on their own events and have to survive a
+                // discovery update, and latency is not one of them — so what it sends is the whole
+                // truth about the column. Keeping a value when nil arrives was subtler than it
+                // looked: the engine drops a reading its timing pass could not replace, and the
+                // drop reached the model and stopped there, leaving the figure it had refused on
+                // screen and the two disagreeing with no way to tell from the outside.
+                existing.latencyMilliseconds = incoming.latencyMilliseconds
                 if !existing.hasMACAddress, incoming.hasMACAddress {
                     existing.macAddress = incoming.macAddress
                     existing.vendor = incoming.vendor

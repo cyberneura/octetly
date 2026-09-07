@@ -23,8 +23,11 @@ swift run Octetly
 ## テスト
 
 `Tests/OctetlyTests/` に swift-testing のテストがある。対象は入力を解釈する純粋な
-ロジック (`ScanRange` / `IPv4` / `IPv6` / `OUIDatabase` / `NeighbourCache` / `Device`) だけで、
-UI とネットワーク I/O は入っていない。
+ロジックと、掃引の設定を決める純粋関数 (`ScanRange` / `IPv4` / `IPv6` / `OUIDatabase` /
+`NeighbourCache` / `Device` / `DeviceIdentity` / `DNSName` / `SweepProfile` /
+`ICMPPinger.sendWindow` / `EchoPinger.reportableRoundTrip`) で、UI とネットワーク I/O は
+入っていない。`Network/` の中でもソケットに触らないものはテスト対象にする。ソケットや
+子プロセスと同居していてテストが届かない判断は、純粋関数に切り出してから書く。
 
 ```shell
 swift test

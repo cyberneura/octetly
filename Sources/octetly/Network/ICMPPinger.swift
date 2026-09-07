@@ -17,11 +17,37 @@ final class ICMPPinger: EchoPinger, @unchecked Sendable {
     ///
     /// Each window costs its own reply wait, so the count of windows — not the count of packets —
     /// is what sets the floor on a sweep's runtime. A fixed window would cut a /16 into 256 of
-    /// them and spend a minute waiting; this keeps any range to at most ~16 windows while still
-    /// splitting a small one finely enough that rows appear as they are found.
-    static func sendWindow(for addresses: Int) -> Int {
-        min(max(256, addresses / 16), 4096)
+    /// them and spend a minute waiting; counting by range keeps one to at most ~16 windows while
+    /// still splitting a small range finely enough that rows appear as they are found.
+    ///
+    /// `pacing` is what keeps the second half of that true once a pass is spread out, and it is
+    /// allowed to raise the window count past that ~16. Rows and the progress bar only move when a
+    /// window closes, and a window of 256 addresses paced at 25 ms spends over 7 s inside one call
+    /// — which made a routed /24 a single window, so the list sat empty for that long and then
+    /// filled all at once, three times over.
+    ///
+    /// Splitting is not free, and the cost is per window rather than per packet: one reply wait
+    /// (`ScanEngine.windowReplyTimeout`, 50 ms) always, plus one `arp -anl` — measured at 20–40 ms —
+    /// on each window that found something, which on a sparse range is fewer than all of them. A
+    /// routed /24 goes from 1 window to 7 and a /22 from 4 to 26, so between 0.3 s and 0.5 s a pass
+    /// on the /24 and between 1.1 s and 2 s on the /22.
+    ///
+    /// The sends are the same addresses at the same gap, except across a window boundary, where the
+    /// reply wait and any ARP read fall between two sends that would otherwise have been `pacing`
+    /// apart. Nothing is sent more or less often for it; six gaps out of 253 are longer.
+    static func sendWindow(for addresses: Int, pacing: TimeInterval) -> Int {
+        let byCount = min(max(256, addresses / 16), 4096)
+        guard pacing > 0 else { return byCount }
+        return max(1, min(byCount, Int(maximumWindowSendTime / pacing)))
     }
+
+    /// How long one window may spend sending before it closes so that its rows can appear.
+    ///
+    /// A responsiveness figure and nothing else — how long a list may sit unchanged before it reads
+    /// as stuck — which is why it is not the reply timeout it used to sit next to at 1.5 s. Like
+    /// every other gap here it is spent in requested sleep, so the window it sizes takes about a
+    /// seventh longer than this: 40 addresses at 25 ms, measured at 1.14 s.
+    static let maximumWindowSendTime: TimeInterval = 1.0
 
     init?() {
         let descriptor = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP)

@@ -20,12 +20,19 @@ enum CommandRunner {
     /// `.exit` with a non-zero status, so nothing has to be recorded on the way in and raced
     /// against.
     ///
-    /// `run` throws the distinction away, which is right for a helper read line by line: half of
-    /// dig(1)'s answer is no worse than none of it. It is wrong wherever the *absence* of a line is
-    /// read as meaning something, because a torn read then looks exactly like a real answer of
-    /// "nothing". The neighbour cache is read that way — a partial ndp(8) is indistinguishable
-    /// from a segment with nothing on it, and acting on one gives every host it is missing a
-    /// second row.
+    /// `run` throws the distinction away, which is right where something in the output stands in
+    /// for the status. The fallback sweep reads ping(8) that way: it takes no figure at all unless
+    /// the report contains `1 packets received`, and ping prints its `time=` line before that
+    /// summary, so a read torn anywhere has either both or neither. It is wrong on two counts.
+    /// Wherever the *absence* of a line is read as meaning something, a torn
+    /// read looks exactly like a real answer of "nothing" — the neighbour cache is read that way,
+    /// and a partial ndp(8) is indistinguishable from a segment with nothing on it, which gives
+    /// every host it is missing a second row. And wherever a line is taken at face value from a
+    /// helper that talks while it fails: dig(1) prints
+    /// `/usr/bin/dig: couldn't get address for '…': not found` on the way out, and nothing marks
+    /// that as a diagnostic except the status it then exits with, and smbutil(1)'s output is read
+    /// line by line, so a read torn after `Server: PRIN` names a host `PRIN`. Every lookup that
+    /// turns output into a name is on this rather than on `run` for that reason.
     static func runChecked(_ executable: String, _ arguments: [String],
                            timeout: TimeInterval = 2) async -> (output: String, completed: Bool) {
         let helper = Helper()
