@@ -13,9 +13,10 @@ enum CLITool {
                octetly version
 
         lookup  A name is resolved to its IPv4 and IPv6 addresses by the system resolver
-                (/etc/hosts, DNS, and mDNS on this Mac's own segment). An address is named
-                by reverse DNS, by the host's own mDNS responder asked directly, and by SMB,
-                which works through a router or a VPN where multicast does not.
+                (/etc/hosts, DNS, and mDNS on this Mac's own segment). An IPv4 address is
+                named by reverse DNS, by the host's own mDNS responder asked directly, and by
+                SMB, which works through a router or a VPN where multicast does not. An IPv6
+                address is named by the system resolver alone.
 
         search  Scans a range the way the window does and prints the hosts whose name,
                 address, MAC address or vendor contains <word>, or every host without one.
@@ -66,6 +67,8 @@ enum CLITool {
         var mdnsName: String?
         var smbName: String?
         var smbDomain: String?
+        /// What the system resolver calls an IPv6 address. The one source asked for one; see below.
+        var resolverName: String?
         var failure: String?
 
         var found: Bool { !(ipv4 ?? []).isEmpty || !(ipv6 ?? []).isEmpty || name != nil }
@@ -95,7 +98,7 @@ enum CLITool {
     }
 
     private static func lookup(_ target: String) async -> LookupResult {
-        if IPv4.number(target) != nil || IPv6.isValid(target) {
+        if IPv4.number(target) != nil {
             let identity = await ScanEngine.identity(of: target)
             return LookupResult(query: target, kind: "address",
                                 name: present(identity.hostname),
@@ -103,6 +106,15 @@ enum CLITool {
                                 mdnsName: present(identity.mdnsName),
                                 smbName: present(identity.smbName),
                                 smbDomain: present(identity.smbDomain))
+        }
+        if IPv6.isValid(target) {
+            // Named the way a scan names an IPv6-only row: one getnameinfo, which is reverse DNS for
+            // a routable address and mDNSResponder for one on this segment. The engine files that
+            // under mDNS whichever it was, so it is reported here as the resolver's answer rather
+            // than claimed for a source it may not have come from.
+            let identity = await ScanEngine.identity(of: target)
+            let name = present(identity.hostname)
+            return LookupResult(query: target, kind: "address", name: name, resolverName: name)
         }
         let addresses = await BlockingWork.run { AddressResolver.addresses(of: target) }
         return LookupResult(query: target, kind: "name", ipv4: addresses.ipv4, ipv6: addresses.ipv6,
@@ -116,7 +128,8 @@ enum CLITool {
             rows += (result.ipv6 ?? []).map { ("IPv6", $0) }
         } else {
             let names: [(String, String?)] = [("DNS", result.dnsName), ("mDNS", result.mdnsName),
-                                              ("SMB", result.smbName), ("Workgroup", result.smbDomain)]
+                                              ("SMB", result.smbName), ("Workgroup", result.smbDomain),
+                                              ("Resolver", result.resolverName)]
             rows = names.compactMap { label, value in value.map { (label, $0) } }
         }
         print(result.query)
@@ -151,7 +164,7 @@ enum CLITool {
             smbName = present(device.smbName)
             smbDomain = present(device.smbDomain)
             macAddress = present(device.macAddress)
-            vendor = device.hasVendor ? device.vendor : nil
+            vendor = knownVendor(of: device)
             latencyMilliseconds = device.latencyMilliseconds
         }
     }
@@ -225,7 +238,7 @@ enum CLITool {
         let header = ["ADDRESS", "NAME", "MAC", "VENDOR", "IPV6"]
         let rows = devices.map { device in
             [device.ipv4 ?? "—", device.hasName ? device.displayName : "—", device.macAddress,
-             device.hasVendor ? device.vendor : "—", device.ipv6Addresses.joined(separator: ", ")]
+             knownVendor(of: device) ?? "—", device.ipv6Addresses.joined(separator: ", ")]
         }
         let widths = header.indices.map { column in
             ([header] + rows).map { $0[column].count }.max() ?? 0
@@ -261,4 +274,11 @@ enum CLITool {
 /// nil for the "—" the scan uses to mean nothing was found, so JSON carries no placeholder.
 private func present(_ value: String) -> String? {
     value == DNSName.none || value.isEmpty ? nil : value
+}
+
+/// The vendor, keeping `Randomized`. `Device.hasVendor` treats it as missing because the window
+/// styles it like an unknown one, but it is a finding — the address was never assigned — and
+/// `search Randomized` matches on it, so hiding it would leave rows with no visible reason.
+private func knownVendor(of device: Device) -> String? {
+    device.vendor == OUIDatabase.unknownVendor ? nil : device.vendor
 }
