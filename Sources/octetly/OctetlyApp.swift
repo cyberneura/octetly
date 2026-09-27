@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 
-@main
 struct OctetlyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var scanner = NetworkScanner()

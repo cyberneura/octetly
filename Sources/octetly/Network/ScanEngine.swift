@@ -700,7 +700,7 @@ enum ScanEngine {
 
     // MARK: - Naming
 
-    private static func identity(of address: String) async -> DeviceIdentity {
+    static func identity(of address: String) async -> DeviceIdentity {
         // dig(1) asks the configured unicast resolver, and no link-local address has a delegation
         // in ip6.arpa for it to find, so the whole child process can only ever come back empty for
         // one. getnameinfo goes through the system resolver instead, which asks mDNSResponder, and

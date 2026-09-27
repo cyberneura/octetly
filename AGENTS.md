@@ -79,6 +79,14 @@ version の出どころは**リポジトリ直下の `VERSION` ファイル 1 �
 (`OctetlyApp.swift` の `applyDockIcon` は Info.plist の有無で分岐する)。
 片方でしか確認しない変更を入れないこと。
 
+## コマンドライン
+
+実行ファイルは 1 つで、`OctetlyMain` (`@main`) が引数を見て GUI と CLI を振り分ける
+(`octetly lookup` / `octetly search`)。**`CLICommand.parse` は未知の引数に nil を返して
+GUI を開く。** macOS や Xcode が付ける `-psn_…` / `-NSDocumentRevisionsDebugMode` で
+起動がエラーにならないようにするためで、「不明な引数はエラー」に変えないこと。
+パーサは `CLICommandTests` で検査している。
+
 ## 生成データ
 
 `Sources/octetly/Resources/oui.csv` は IEEE の 3 レジストリを統合した生成物
