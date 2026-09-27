@@ -184,7 +184,7 @@ enum CLITool {
         // Read-only: the window's store consolidates keys as it goes, and a search is not the
         // place to rewrite what the window saved.
         let annotations = AnnotationStore()
-        let matches = devices.values
+        let hits = devices.values
             .map { device in
                 var device = device
                 if let identity = identities[device.id] {
@@ -198,16 +198,16 @@ enum CLITool {
                 device.customName = named.isEmpty ? annotations[device.addressAnnotationKey].name : named
                 return device
             }
-            .filter { matches($0, query) }
+            .filter { Self.matches($0, query) }
             .sorted { $0.addressOrder < $1.addressOrder }
 
-        note("\(devices.count.formatted()) found, \(matches.count.formatted()) matching.")
+        note("\(devices.count.formatted()) found, \(hits.count.formatted()) matching.")
         if json {
-            guard printJSON(matches.map(SearchResult.init)) else { return 2 }
+            guard printJSON(hits.map(SearchResult.init)) else { return 2 }
         } else {
-            printTable(matches)
+            printTable(hits)
         }
-        return matches.isEmpty ? 1 : 0
+        return hits.isEmpty ? 1 : 0
     }
 
     /// What the window's search field matches, and every name the scan found besides the one the
