@@ -16,6 +16,12 @@ struct OctetlyApp: App {
         // rebuilding that strip by hand was the alternative, and it meant guessing at the safe
         // area and at where the traffic lights land.
         .windowToolbarStyle(.unifiedCompact)
+        .commands {
+            // Right under About, where the app's own notices are looked for.
+            CommandGroup(after: .appInfo) {
+                Button("Third-Party Licenses…") { LicensesWindow.show() }
+            }
+        }
 
         Settings { SettingsView(scanner: scanner, settings: scanner.settings) }
     }

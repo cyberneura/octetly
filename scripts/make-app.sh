@@ -100,6 +100,17 @@ if [ ! -f "$APP/Contents/Resources/oui.csv" ]; then
   exit 1
 fi
 
+# The About-menu notices and `octetly --license` read these. Missing, the menu
+# falls back to the copy on GitHub and --license exits 2, neither of which a
+# release build should do.
+for notice in LICENSE.txt THIRD-PARTY-NOTICES.txt; do
+  if [ ! -f "$APP/Contents/Resources/$notice" ]; then
+    echo "Error: $notice did not make it into the app." >&2
+    echo "  Run scripts/generate-third-party-notices.sh and commit the result." >&2
+    exit 1
+  fi
+done
+
 # The .icns is generated rather than committed: AppIcon.png is the master, and a
 # second copy of it in another format is a second thing to keep in step.
 # The master is 512x512, so the 1024 slot is left out rather than filled by
@@ -128,7 +139,7 @@ fi
 
 if [ -n "$IDENTITY" ]; then
   # There is no nested code to sign first: what went into Contents/Resources is
-  # data (a csv and two images), and the only executable is Contents/MacOS.
+  # data (a csv, two images and two text files), and the only executable is Contents/MacOS.
   # --options runtime (the hardened runtime) is what notarization requires;
   # --timestamp is what keeps the signature valid after the certificate expires.
   echo "Signing with: $IDENTITY"

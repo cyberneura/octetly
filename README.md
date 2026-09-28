@@ -143,6 +143,8 @@ octetly search --range 10.8.0.0/24 --json
 
 Progress goes to standard error and results to standard output. `--json` prints them as JSON instead of a table. The exit status is 0 when every lookup found something or the search matched a host, 1 when not, and 2 for a command that could not run.
 
+`octetly --license` prints Octetly's license and the third-party notices.
+
 Run from Terminal, the Local Network permission is asked for on behalf of the terminal app rather than Octetly, the same as with `swift run`.
 
 ## Releases
@@ -164,3 +166,25 @@ number to `VERSION`, pushes, and watches the run that starts.
 The Homebrew cask lives in [cyberneura/homebrew-tap](https://github.com/cyberneura/homebrew-tap)
 and points itself at the newest release once an hour, so `brew` is up to an hour behind
 a release.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+## Third-party licenses
+
+[THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) lists what the app bundles besides its own
+code. Octetly has no package dependencies, so the list holds no libraries, only the source of the
+IEEE vendor data in `oui.csv`. In the app it is under **Octetly → Third-Party Licenses…**, right
+below About, and on the command line under `octetly --license`.
+
+The file and the copies the app bundles (`Sources/octetly/Resources/LICENSE.txt` and
+`Sources/octetly/Resources/THIRD-PARTY-NOTICES.txt`) are generated. After adding a dependency or
+changing `LICENSE`, regenerate them:
+
+```sh
+scripts/generate-third-party-notices.sh
+```
+
+`scripts/generate-third-party-notices.sh --check` fails when they are stale, and the test job in
+the release workflow runs it.
