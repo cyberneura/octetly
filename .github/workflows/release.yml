@@ -144,6 +144,11 @@ jobs:
       - name: Show the toolchain
         run: swift --version
 
+      # The notices and the copies the app bundles are generated files; a
+      # dependency added without regenerating them fails here.
+      - name: Check third-party notices
+        run: scripts/generate-third-party-notices.sh --check
+
       - name: Run tests
         run: swift test
 

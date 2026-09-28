@@ -98,6 +98,26 @@ python3 scripts/update-oui.py
 
 レビューやコードリーディングでは対象から外すこと。
 
+## ライセンス表示
+
+`LICENSE` (MIT) と `THIRD-PARTY-NOTICES.txt` はリポジトリ直下にあり、アプリはその
+コピー (`Sources/octetly/Resources/LICENSE.txt` / `THIRD-PARTY-NOTICES.txt`) を
+リソースとして持つ。アプリメニューの About 直下の **Third-Party Licenses…** と
+`octetly --license` がこれを表示する (`Licenses.swift`)。
+
+**どれも手で編集しない。** `Package.swift` に依存を足した時や `LICENSE` を変えた時は
+次を流し直して、生成された 3 ファイルをコミットする。
+
+```shell
+scripts/generate-third-party-notices.sh
+```
+
+今は依存が無いので「同梱しているライブラリは無い」という定型文を書くだけで、
+`.package(...)` が現れるとエラーで止まる。依存を足す時はスクリプトを拡張して
+`Package.resolved` の pin と `.build/checkouts/*/LICENSE*` の本文を載せること
+(resolve は macOS でしかできない)。古いまま放置すると release.yml の test job
+(`--check`) と `LicenseTests` が落ちる。
+
 ## 課題管理
 
 `_issues/<YYYYMMDD>-<概要>/ISSUE.md`。`.gitignore` に入れてあるのでコミットされない。

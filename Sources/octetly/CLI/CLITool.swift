@@ -11,6 +11,7 @@ enum CLITool {
         usage: octetly lookup [--json] <name | address>...
                octetly search [--json] [--range <range>] [<word>]
                octetly version
+               octetly --license
 
         lookup  A name is resolved to its IPv4 and IPv6 addresses by the system resolver
                 (/etc/hosts, DNS, and mDNS on this Mac's own segment). An IPv4 address is
@@ -27,6 +28,8 @@ enum CLITool {
                      address. Defaults to this Mac's own network, capped at 1,024 addresses.
         --json       Print JSON instead of text.
 
+        --license    Print Octetly's license and the third-party notices.
+
         Run with no arguments to open the window.
         """
 
@@ -37,6 +40,13 @@ enum CLITool {
             return 0
         case .version:
             print("Octetly \(version)")
+            return 0
+        case .license:
+            guard let text = Licenses.text() else {
+                note("the license files are missing from this build; see \(Licenses.noticesURL.absoluteString)")
+                return 2
+            }
+            print(text, terminator: "")
             return 0
         case .lookup(let targets, let json):
             return await lookup(targets, json: json)

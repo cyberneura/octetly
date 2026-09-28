@@ -4,6 +4,8 @@ import Foundation
 enum CLICommand: Equatable, Sendable {
     case help
     case version
+    /// Octetly's license and the third-party notices.
+    case license
     /// Names to addresses through the system resolver, or addresses to names by asking the host.
     case lookup(targets: [String], json: Bool)
     /// A scan of `range` (the automatic one when nil), keeping the hosts that match `query`
@@ -24,6 +26,10 @@ enum CLICommand: Equatable, Sendable {
             return .help
         case "version", "--version":
             return .version
+        // Recognised in first position only, like every command here. After anything else it is
+        // not looked at, so a launch carrying macOS's own arguments still opens the window.
+        case "license", "--license":
+            return .license
         case "lookup":
             let options = try Options.parse(rest, command: name, acceptsRange: false)
             guard !options.operands.isEmpty else { throw CLIError.missingTarget }
