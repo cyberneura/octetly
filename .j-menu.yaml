@@ -1,0 +1,36 @@
+# j-menu (https://github.com/cyberneura/j-menu) のメニュー定義。
+# エントリはこのファイルのあるディレクトリ (リポジトリ直下) で実行される。
+menu:
+  - title: 起動
+    help: Octetly をどの形で起動するかを選ぶ。
+    submenu:
+      - title: デバッグ実行 (swift run)
+        help: >
+          デバッグビルドで起動する。作られるのは .app ではなく素の実行ファイルなので、
+          ローカルネットワークの許可プロンプトに出る名前が起動元のターミナルになることがある。
+          Dock アイコンは起動時に AppIcon.png から差し込まれる。終了は Ctrl-C。
+        shell: swift run Octetly
+
+      - title: リリースビルドで実行 (swift run -c release)
+        help: >
+          最適化ありで起動する。掃引の速度や UI の重さをデバッグビルドの遅さ抜きで見たい時用。
+          .app ではない点はデバッグ実行と同じ。
+        shell: swift run -c release Octetly
+
+      - title: .app を組み立てて起動 (open)
+        help: >
+          scripts/make-app.sh で dist/Octetly.app を作り、Finder から開くのと同じ形で起動する。
+          Info.plist があるので、権限プロンプトの名前や Dock アイコンは配布版と同じ挙動になる。
+          署名はしない。universal ビルドなので素の swift build より時間がかかる。
+        shell: scripts/make-app.sh && open dist/Octetly.app
+
+      - title: .app を組み立てて起動 (ターミナルにログを出す)
+        help: >
+          dist/Octetly.app の中の実行ファイルを直接起動する。バンドル版の挙動のまま
+          標準出力とクラッシュ時のメッセージがこのターミナルに出る。終了は Ctrl-C。
+        shell: scripts/make-app.sh && dist/Octetly.app/Contents/MacOS/Octetly
+
+      - title: 作成済みの .app を起動 (ビルドしない)
+        help: >
+          前回組み立てた dist/Octetly.app をそのまま開く。コードの変更は反映されない。
+        shell: open dist/Octetly.app
