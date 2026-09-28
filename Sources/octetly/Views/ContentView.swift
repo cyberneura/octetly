@@ -56,6 +56,10 @@ struct ContentView: View {
 
     private var deviceTable: some View {
         table
+            // Without this the table runs up under the title bar and insets its header by the
+            // toolbar's height, leaving a blank band above it. With it, the toolbar becomes a
+            // strip of its own across the whole window and the header sits directly beneath.
+            .ignoresSafeArea(edges: .top)
             .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -78,7 +82,10 @@ struct ContentView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-        .frame(width: 240)
+        // The toolbar pins this to the trailing edge with its own margin. The width leaves the
+        // same margin on the leading side when the inspector is at its minimum width; a wider
+        // inspector only adds room on the left.
+        .frame(width: 228)
     }
 
     private var table: some View {
