@@ -26,7 +26,8 @@ swift run Octetly
 ロジックと、掃引の設定を決める純粋関数 (`ScanRange` / `IPv4` / `IPv6` / `OUIDatabase` /
 `NeighbourCache` / `Device` / `DeviceIdentity` / `DNSName` / `SweepProfile` /
 `ICMPPinger.sendWindow` / `EchoPinger.reportableRoundTrip`) で、UI とネットワーク I/O は
-入っていない。`Network/` の中でもソケットに触らないものはテスト対象にする。ソケットや
+入っていない。`CommandLineTool` だけは一時フォルダに実際にリンクを張って検査する。
+`Network/` の中でもソケットに触らないものはテスト対象にする。ソケットや
 子プロセスと同居していてテストが届かない判断は、純粋関数に切り出してから書く。
 
 ```shell
@@ -72,12 +73,17 @@ version の出どころは**リポジトリ直下の `VERSION` ファイル 1 �
 書くと配布版が起動時に落ちる。**
 
 そのため make-app.sh はリソースバンドルの中身を `Contents/Resources` に展開し、
-`BundledResource.url(forResource:withExtension:)` が `Bundle.main` を先に、
-`Bundle.module` を後に見る。`swift run` では前者が空振りして後者が当たる。
+`BundledResource.url(forResource:withExtension:)` が .app (`BundledResource.app`、通常は
+`Bundle.main`) を先に、`Bundle.module` を後に見る。`swift run` では前者が空振りして後者が当たる。
 
 **バンドル版と `swift run` で挙動が変わる**箇所は他にもある
 (`OctetlyApp.swift` の `applyDockIcon` は Info.plist の有無で分岐する)。
 片方でしか確認しない変更を入れないこと。
+
+起動形態はもう 1 つある。**Install Command-Line Tool… が作る `/usr/local/bin/octetly`
+(シンボリックリンク) 経由**では、`Bundle.main` がリンクのあるフォルダになり、Info.plist も
+リソースも無い。.app の中身を読む時は `BundledResource.app` (リンクを解決した .app) を使う。
+確認は `scripts/make-app.sh` で作った .app にリンクを張って `version` / `--license` を叩く。
 
 ## コマンドライン
 
