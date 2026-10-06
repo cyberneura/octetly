@@ -21,6 +21,9 @@ struct OctetlyApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Third-Party Licenses…") { LicensesWindow.show() }
             }
+            CommandGroup(after: .appSettings) {
+                Button("Install Command-Line Tool…") { CommandLineToolInstaller.run() }
+            }
         }
 
         Settings { SettingsView(scanner: scanner, settings: scanner.settings) }
@@ -44,6 +47,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// macOS has already applied by this point. Assigning over it would replace a full icon set
     /// with a single 512-pixel image, so the .app is left alone: the presence of CFBundleIconFile
     /// is what tells the two apart, since a package executable has no Info.plist to hold it.
+    /// `Bundle.main` is the one to ask: launched through the command-line tool's symbolic link the
+    /// process is a bare executable too, and macOS has applied nothing even though the .app the
+    /// link leads to has an .icns.
     @MainActor
     private func applyDockIcon() {
         guard Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") == nil else { return }

@@ -61,7 +61,7 @@ enum CLITool {
 
     /// The released app carries its version in Info.plist; `swift run` has no Info.plist to read.
     private static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        BundledResource.app.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "(development build)"
     }
 
