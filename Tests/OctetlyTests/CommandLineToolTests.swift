@@ -19,7 +19,7 @@ struct CommandLineToolTests {
         #expect(CommandLineTool.plan(existing: .other, executable: Self.executable) == .blocked)
     }
 
-    @Test("A translocated or read-only copy is refused as a link target")
+    @Test("A translocated, read-only or swift run copy is refused as a link target")
     func locationProblem() {
         let translocated = "/private/var/folders/xy/T/AppTranslocation/1A2B/d/Octetly.app/Contents/MacOS/Octetly"
         #expect(CommandLineTool.locationProblem(executable: translocated, onReadOnlyVolume: true)
@@ -28,6 +28,9 @@ struct CommandLineToolTests {
             == .readOnlyVolume)
         #expect(CommandLineTool.locationProblem(executable: Self.executable, onReadOnlyVolume: false)
             == nil)
+        #expect(CommandLineTool.locationProblem(
+            executable: "/src/octetly/.build/arm64-apple-macosx/debug/Octetly", onReadOnlyVolume: false)
+            == .notInApp)
     }
 
     @Test("A link is made in a missing folder and replaces a link already there")
@@ -101,32 +104,55 @@ struct CommandLineToolTests {
         #expect(!FileManager.default.fileExists(atPath: link))
     }
 
-    // Run by a real shell with a program that prints its arguments, so a quoting mistake shows up
-    // as arguments split, joined or expanded.
-    @Test("The privileged command passes each path as one argument")
-    func privilegedCommandQuoting() throws {
+    // Run by a real shell, as the user rather than root, in a folder of its own. The target's name
+    // carries every character the quoting has to survive, so a quoting mistake shows up as a
+    // missing link or a link to the wrong place.
+    @Test("The privileged command links into a missing folder and replaces a link")
+    func privilegedCommandLinks() throws {
         // Arrange
         let root = try Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let program = root.appendingPathComponent("It's \"Octetly\"").path
-        try Data("#!/bin/sh\nprintf '%s\\n' \"$@\"\n".utf8).write(to: URL(fileURLWithPath: program))
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: program)
-        let target = #"/Apps/It's "x" $HOME `id`/Octetly"#
-        let link = "/usr/local/bin/oct etly"
+        let first = try Self.executableFile(in: root, named: #"It's "Octetly" $HOME `id`"#)
+        let second = try Self.executableFile(in: root, named: "second")
+        let link = root.appendingPathComponent("bin dir/octetly").path
 
         // Act
-        let output = try Self.shell(
-            CommandLineTool.privilegedCommand(program: program, linking: target, at: link))
+        let firstStatus = try Self.shell(CommandLineTool.privilegedCommand(linking: first, at: link))
+        let firstDestination = try FileManager.default.destinationOfSymbolicLink(atPath: link)
+        let secondStatus = try Self.shell(CommandLineTool.privilegedCommand(linking: second, at: link))
 
         // Assert
-        #expect(output == ["install-link", target, link])
+        #expect(firstStatus == 0)
+        #expect(firstDestination == first)
+        #expect(secondStatus == 0)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link) == second)
     }
 
-    @Test("install-link takes exactly a target and a link")
-    func parseInstallLink() throws {
-        #expect(try CLICommand.parse(["install-link", "/a/Octetly", "/usr/local/bin/octetly"])
-            == .installLink(target: "/a/Octetly", link: "/usr/local/bin/octetly"))
-        #expect(throws: CLIError.installLinkArguments) { try CLICommand.parse(["install-link", "/a"]) }
+    @Test("The privileged command leaves a file and a folder alone, and needs the target")
+    func privilegedCommandRefuses() throws {
+        // Arrange
+        let root = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = try Self.executableFile(in: root, named: "target")
+        let file = root.appendingPathComponent("file").path
+        try Data("keep".utf8).write(to: URL(fileURLWithPath: file))
+        let folder = root.appendingPathComponent("folder").path
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: false)
+        let unused = root.appendingPathComponent("unused").path
+
+        // Act
+        let fileStatus = try Self.shell(CommandLineTool.privilegedCommand(linking: target, at: file))
+        let folderStatus = try Self.shell(CommandLineTool.privilegedCommand(linking: target, at: folder))
+        let movedStatus = try Self.shell(
+            CommandLineTool.privilegedCommand(linking: root.appendingPathComponent("moved").path, at: unused))
+
+        // Assert
+        #expect(fileStatus != 0)
+        #expect(try String(contentsOfFile: file, encoding: .utf8) == "keep")
+        #expect(folderStatus != 0)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder).isEmpty)
+        #expect(movedStatus != 0)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: unused)) == nil)
     }
 
     @Test("The AppleScript literal reads back as the string it was made from")
@@ -165,16 +191,14 @@ struct CommandLineToolTests {
             .sorted()
     }
 
-    private static func shell(_ command: String) throws -> [String] {
+    private static func shell(_ command: String) throws -> Int32 {
         let process = Process()
-        let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", command]
-        process.standardOutput = pipe
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        return String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
-            .dropLast().map(String.init)
+        return process.terminationStatus
     }
 }

@@ -11,9 +11,6 @@ enum CLICommand: Equatable, Sendable {
     /// A scan of `range` (the automatic one when nil), keeping the hosts that match `query`
     /// (every host when nil).
     case search(query: String?, range: ScanRange?, json: Bool)
-    /// What "Install Command-Line Tool…" runs as root when the folder needs an administrator. Not in
-    /// the usage: it is there for the app to call, and `sudo` already does the same job by hand.
-    case installLink(target: String, link: String)
 
     /// The command the arguments name, or nil when they name none and the window should open.
     ///
@@ -46,9 +43,6 @@ enum CLICommand: Equatable, Sendable {
             let query = options.operands.first?.trimmingCharacters(in: .whitespaces)
             return .search(query: query?.isEmpty == false ? query : nil,
                            range: options.range, json: options.json)
-        case "install-link":
-            guard rest.count == 2 else { throw CLIError.installLinkArguments }
-            return .installLink(target: rest[0], link: rest[1])
         default:
             return nil
         }
@@ -116,7 +110,6 @@ enum CLIError: LocalizedError, Equatable {
     case unexpectedValue(String)
     case unknownOption(String, command: String)
     case badRange(ScanRangeError)
-    case installLinkArguments
 
     var errorDescription: String? {
         switch self {
@@ -132,8 +125,6 @@ enum CLIError: LocalizedError, Equatable {
             "\(command) has no option \(flag)."
         case .badRange(let error):
             error.errorDescription ?? "The range is not valid."
-        case .installLinkArguments:
-            "install-link takes a target and a link path."
         }
     }
 }

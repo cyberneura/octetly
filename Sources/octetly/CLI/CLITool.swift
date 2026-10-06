@@ -52,14 +52,6 @@ enum CLITool {
             return await lookup(targets, json: json)
         case .search(let query, let range, let json):
             return await search(query, in: range, json: json)
-        case .installLink(let target, let link):
-            do {
-                try CommandLineTool.link(target, at: link)
-                return 0
-            } catch {
-                note(error.localizedDescription)
-                return 2
-            }
         }
     }
 

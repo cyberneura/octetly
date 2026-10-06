@@ -30,6 +30,8 @@ enum CommandLineTool {
         case translocated
         /// The disk image the app shipped in, which goes away when it is ejected.
         case readOnlyVolume
+        /// A `swift run` build, which the next clean or rebuild replaces or removes.
+        case notInApp
     }
 
     static func plan(existing: Existing, executable: String) -> Plan {
@@ -46,6 +48,7 @@ enum CommandLineTool {
     static func locationProblem(executable: String, onReadOnlyVolume: Bool) -> LocationProblem? {
         if executable.contains("/AppTranslocation/") { return .translocated }
         if onReadOnlyVolume { return .readOnlyVolume }
+        if !executable.contains(".app/Contents/MacOS/") { return .notInApp }
         return nil
     }
 
@@ -66,8 +69,9 @@ enum CommandLineTool {
     ///
     /// What this guards against is the user's own mistakes and slow dialogs, not an adversary. The
     /// moved-aside name is still a path, and something that can write to the folder can swap it
-    /// between the check and the unlink. Only an account that could delete that entry directly can
-    /// do so: root when the folder is root's, and otherwise the user this runs as.
+    /// between the check and the unlink. This runs only in a folder the user can write to, so
+    /// that is something running as the user, or root, either of which could delete the entry
+    /// directly.
     static func link(_ target: String, at link: String) throws {
         // The app can be moved while the confirmation is up, and a link to where it was is no use.
         guard FileManager.default.isExecutableFile(atPath: target) else {
@@ -111,10 +115,23 @@ enum CommandLineTool {
         if let aside { unlink(aside) }
     }
 
-    /// The command line that runs `link` as root, through Octetly's own `install-link`, for when
-    /// the folder needs an administrator.
-    static func privilegedCommand(program: String, linking target: String, at link: String) -> String {
-        [program, "install-link", target, link].map(shellQuoted).joined(separator: " ")
+    /// The shell command that makes the link as root, for a folder this user cannot write to.
+    ///
+    /// Only system tools, so that nothing the user can write runs as root; re-running Octetly
+    /// itself would let a process that can replace the app's executable swap it while the password
+    /// prompt is up. The shell cannot replace "only a link" in one step the way `link(_:at:)` does,
+    /// but in a folder only root can write to, only root could slip something between the steps.
+    /// They are still re-checked here, because the confirmation and the prompt come between the
+    /// plan and this: `-x` for an app moved meanwhile, `-e` for a folder, which `ln -s` would make
+    /// the link inside, and no `-f`, so that a file is a failure rather than a deletion.
+    static func privilegedCommand(linking target: String, at link: String) -> String {
+        let directory = (link as NSString).deletingLastPathComponent
+        let quotedLink = shellQuoted(link)
+        return "[ -x \(shellQuoted(target)) ]"
+            + " && /bin/mkdir -p \(shellQuoted(directory))"
+            + " && { [ ! -L \(quotedLink) ] || /bin/rm \(quotedLink); }"
+            + " && [ ! -e \(quotedLink) ]"
+            + " && /bin/ln -s \(shellQuoted(target)) \(quotedLink)"
     }
 
     private static func failure(_ what: String) -> LinkError {
@@ -157,6 +174,11 @@ enum CommandLineToolInstaller {
                    "This copy is on a read-only volume such as the disk image, and a link to it "
                    + "would stop working once the volume is ejected.")
             return
+        case .notInApp:
+            inform("Install the command from Octetly.app.",
+                   "This copy is not inside an app, as with `swift run`, and a link to it would "
+                   + "break on the next clean or rebuild.")
+            return
         case nil:
             break
         }
@@ -193,7 +215,7 @@ enum CommandLineToolInstaller {
             }
         } else {
             outcome = runAsAdministrator(
-                CommandLineTool.privilegedCommand(program: executable, linking: executable, at: link))
+                CommandLineTool.privilegedCommand(linking: executable, at: link))
         }
 
         if case .done = outcome,
