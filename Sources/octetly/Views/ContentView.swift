@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var sortOrder = [KeyPathComparator(\Device.addressOrder)]
     @State private var searchText = ""
     @State private var renamingID: Device.ID?
+    @State private var copier = CellCopier()
     /// Trails scanner.progress so growth can be animated and a reset cannot be.
     @State private var shownFraction: Double = 0
 
@@ -94,7 +95,7 @@ struct ContentView: View {
     private var table: some View {
         Table(rows, selection: $scanner.selectedDeviceID, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.displayName) { device in
-                DeviceNameCell(device: device, editingID: $renamingID) { name in
+                DeviceNameCell(device: device, editingID: $renamingID, copier: copier) { name in
                     scanner.rename(device.id, to: name)
                 }
             }
@@ -106,38 +107,59 @@ struct ContentView: View {
             // what gets dropped when the column is narrow: the prefix and the zone are the halves
             // that tell two of them apart.
             TableColumn("IP Address", value: \.addressOrder) { device in
-                Text(device.displayAddress)
-                    .font(.body.monospaced())
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(device.displayAddress)
+                CopyableCell(cell: DeviceCell(device: device.id, column: .address),
+                             text: device.displayAddress == "—" ? nil : device.displayAddress,
+                             copier: copier) {
+                    Text(device.displayAddress)
+                        .font(.body.monospaced())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(device.displayAddress)
+                }
             }
             .width(min: 120, ideal: 190)
 
             TableColumn("MAC Address", value: \.macAddress) { device in
-                Text(device.macAddress).font(.body.monospaced()).foregroundStyle(.secondary)
+                CopyableCell(cell: DeviceCell(device: device.id, column: .macAddress),
+                             text: device.hasMACAddress ? device.macAddress : nil,
+                             copier: copier) {
+                    Text(device.macAddress).font(.body.monospaced()).foregroundStyle(.secondary)
+                }
             }
             .width(min: 130, ideal: 150)
 
             TableColumn("Vendor", value: \.vendor) { device in
-                Text(device.vendor)
-                    .lineLimit(1)
-                    .foregroundStyle(device.hasVendor ? .primary : .tertiary)
+                CopyableCell(cell: DeviceCell(device: device.id, column: .vendor),
+                             text: device.hasVendor ? device.vendor : nil,
+                             copier: copier) {
+                    Text(device.vendor)
+                        .lineLimit(1)
+                        .foregroundStyle(device.hasVendor ? .primary : .tertiary)
+                }
             }
             .width(min: 120, ideal: 180)
 
             TableColumn("Ports", value: \.portSummary) { device in
-                Text(device.portSummary)
-                    .font(.body.monospacedDigit())
-                    .foregroundStyle(device.portScanState == .done && !device.openPorts.isEmpty ? .primary : .secondary)
+                // Only a list of open ports is worth copying; the other states are status text.
+                let hasOpenPorts = device.portScanState == .done && !device.openPorts.isEmpty
+                CopyableCell(cell: DeviceCell(device: device.id, column: .ports),
+                             text: hasOpenPorts ? device.portSummary : nil,
+                             copier: copier) {
+                    Text(device.portSummary)
+                        .font(.body.monospacedDigit())
+                        .foregroundStyle(hasOpenPorts ? .primary : .secondary)
+                }
             }
             .width(min: 100, ideal: 130)
 
             TableColumn("Ping", value: \.latencySortValue) { device in
-                Text(device.latencySummary)
-                    .font(.body.monospacedDigit())
-                    .foregroundStyle(device.latencyMilliseconds == nil ? .tertiary : .secondary)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                CopyableCell(cell: DeviceCell(device: device.id, column: .ping),
+                             text: device.latencyMilliseconds == nil ? nil : device.latencySummary,
+                             copier: copier, alignment: .trailing) {
+                    Text(device.latencySummary)
+                        .font(.body.monospacedDigit())
+                        .foregroundStyle(device.latencyMilliseconds == nil ? .tertiary : .secondary)
+                }
             }
             .width(min: 70, ideal: 90)
         }
