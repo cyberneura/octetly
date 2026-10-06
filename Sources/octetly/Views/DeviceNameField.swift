@@ -4,12 +4,14 @@ import SwiftUI
 struct DeviceNameCell: View {
     let device: Device
     @Binding var editingID: Device.ID?
+    let copier: CellCopier
     let rename: (String) -> Void
 
     @State private var draft = ""
     @State private var hovering = false
 
     private var isEditing: Bool { editingID == device.id }
+    private var cell: DeviceCell { DeviceCell(device: device.id, column: .name) }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -29,6 +31,13 @@ struct DeviceNameCell: View {
                     .background(.quaternary, in: Capsule())
             }
             Spacer(minLength: 4)
+            // Only a real name: without one the cell shows the address in its place, which the
+            // address column already offers.
+            if device.hasName, copier.showsButton(for: cell) {
+                CellCopyButton(copied: copier.copied == cell) {
+                    copier.copy(device.displayName, from: cell)
+                }
+            }
             Button {
                 draft = device.customName
                 editingID = device.id
@@ -49,7 +58,11 @@ struct DeviceNameCell: View {
                 editor
             }
         }
-        .onHover { hovering = $0 }
+        .contentShape(Rectangle())
+        .onHover {
+            hovering = $0
+            copier.pointer(isInside: $0, cell)
+        }
     }
 
     private var editor: some View {
