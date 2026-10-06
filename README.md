@@ -128,9 +128,9 @@ Octetly runs `/usr/sbin/arp`, `/usr/sbin/ndp`, `/usr/bin/dig`, `/usr/bin/smbutil
 
 The same executable answers two questions without opening the window: what address a name has, and what name an address has. It is meant for the case the window cannot cover by looking — a host on the far side of a VPN whose address changes, where mDNS and NetBIOS broadcasts do not reach.
 
-```sh
-alias octetly=/Applications/Octetly.app/Contents/MacOS/Octetly   # or `swift run Octetly` from source
+**Octetly → Install Command-Line Tool…** puts it on PATH as a symbolic link, `/usr/local/bin/octetly`, to the executable inside the app. macOS asks for an administrator password when that folder needs one. The link points at the app where it is, so after moving Octetly, install it again. A copy running from a read-only volume such as the disk image, or from the temporary location Gatekeeper uses for a quarantined app, is refused, since the link would outlive it. An existing symbolic link is replaced after asking; a file or folder at that path is left alone. From source, `swift run Octetly` takes the same arguments.
 
+```sh
 octetly lookup nas.example.com       # name → IPv4 and IPv6 addresses
 octetly lookup 10.8.0.23 fe80::1%en0  # address → names
 octetly search nas --range 10.8.0.0/24

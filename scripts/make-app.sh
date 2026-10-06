@@ -70,7 +70,7 @@ fi
 # SwiftPM generates looks for that bundle inside Bundle.main.bundleURL, which for
 # an app is the top level of the .app -- where nothing but Contents may live and
 # where anything else breaks the signature. BundledResource.swift is the other
-# half of this: it asks the main bundle first, and only falls back to
+# half of this: it asks the .app first, and only falls back to
 # Bundle.module for `swift run`.
 RESOURCE_BUNDLE="$BIN_PATH/Octetly_Octetly.bundle"
 if [ ! -d "$RESOURCE_BUNDLE" ]; then

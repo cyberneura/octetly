@@ -52,6 +52,14 @@ enum CLITool {
             return await lookup(targets, json: json)
         case .search(let query, let range, let json):
             return await search(query, in: range, json: json)
+        case .installLink(let target, let link):
+            do {
+                try CommandLineTool.link(target, at: link)
+                return 0
+            } catch {
+                note(error.localizedDescription)
+                return 2
+            }
         }
     }
 
@@ -61,7 +69,7 @@ enum CLITool {
 
     /// The released app carries its version in Info.plist; `swift run` has no Info.plist to read.
     private static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        BundledResource.app.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "(development build)"
     }
 
