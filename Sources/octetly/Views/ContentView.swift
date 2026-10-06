@@ -60,6 +60,9 @@ struct ContentView: View {
             // toolbar's height, leaving a blank band above it. With it, the toolbar becomes a
             // strip of its own across the whole window and the header sits directly beneath.
             .ignoresSafeArea(edges: .top)
+            // Ignoring the safe area tells SwiftUI only; AppKit would still inset the rows by the
+            // title bar's height and leave a gap under the header. See TableInsetsReset.
+            .background(TableInsetsReset())
             .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
     }
 
