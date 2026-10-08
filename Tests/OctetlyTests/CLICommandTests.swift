@@ -43,30 +43,47 @@ struct CLICommandTests {
         #expect(throws: CLIError.unexpectedValue("--json")) {
             try CLICommand.parse(["lookup", "--json=yes", "nas"])
         }
+        // Not implemented for lookup, so it has to be refused rather than silently ignored.
+        #expect(throws: CLIError.unknownOption("--address", command: "lookup")) {
+            try CLICommand.parse(["lookup", "--address", "nas"])
+        }
+        #expect(throws: CLIError.unknownOption("-a", command: "lookup")) {
+            try CLICommand.parse(["lookup", "-a", "nas"])
+        }
     }
 
     @Test("search takes one word and an optional range, in either spelling")
     func search() throws {
         let range = try ScanRange.parse("10.8.0.0/24")
         #expect(try CLICommand.parse(["search", "nas", "--range", "10.8.0.0/24"])
-            == .search(query: "nas", range: range, json: false))
+            == .search(query: "nas", range: range, output: .table))
         #expect(try CLICommand.parse(["search", "--range=10.8.0.0/24", "nas"])
-            == .search(query: "nas", range: range, json: false))
+            == .search(query: "nas", range: range, output: .table))
         #expect(try CLICommand.parse(["search", "-r", "10.8.0.0/24", "--json", "nas"])
-            == .search(query: "nas", range: range, json: true))
-        #expect(try CLICommand.parse(["search", "nas"]) == .search(query: "nas", range: nil, json: false))
+            == .search(query: "nas", range: range, output: .json))
+        #expect(try CLICommand.parse(["search", "nas"]) == .search(query: "nas", range: nil, output: .table))
+    }
+
+    @Test("search prints addresses alone on request, in either spelling")
+    func searchAddresses() throws {
+        #expect(try CLICommand.parse(["search", "--address", "nas"])
+            == .search(query: "nas", range: nil, output: .addresses))
+        #expect(try CLICommand.parse(["search", "nas", "-a"])
+            == .search(query: "nas", range: nil, output: .addresses))
+        #expect(try CLICommand.parse(["search", "-a", "-r", "10.8.0.0/24"])
+            == .search(query: nil, range: try ScanRange.parse("10.8.0.0/24"), output: .addresses))
     }
 
     @Test("search without a word lists every host")
     func searchEverything() throws {
-        #expect(try CLICommand.parse(["search"]) == .search(query: nil, range: nil, json: false))
-        #expect(try CLICommand.parse(["search", "  "]) == .search(query: nil, range: nil, json: false))
+        #expect(try CLICommand.parse(["search"]) == .search(query: nil, range: nil, output: .table))
+        #expect(try CLICommand.parse(["search", "  "]) == .search(query: nil, range: nil, output: .table))
     }
 
     @Test("Everything after -- is a word, even when it looks like an option")
     func endOfOptions() throws {
         #expect(try CLICommand.parse(["search", "--", "--json"])
-            == .search(query: "--json", range: nil, json: false))
+            == .search(query: "--json", range: nil, output: .table))
         #expect(try CLICommand.parse(["lookup", "--", "-x"]) == .lookup(targets: ["-x"], json: false))
         // Only the bare spelling ends the options; with a value attached it is a typo.
         #expect(throws: CLIError.unknownOption("--", command: "search")) {
@@ -83,6 +100,16 @@ struct CLICommandTests {
         }
         #expect(throws: CLIError.unknownOption("--ports", command: "search")) {
             try CLICommand.parse(["search", "--ports", "nas"])
+        }
+        // Two formats is a contradiction, whichever order they come in.
+        #expect(throws: CLIError.conflictingOptions("--json", "--address")) {
+            try CLICommand.parse(["search", "--json", "--address", "nas"])
+        }
+        #expect(throws: CLIError.conflictingOptions("--json", "--address")) {
+            try CLICommand.parse(["search", "-a", "--json"])
+        }
+        #expect(throws: CLIError.unexpectedValue("--address")) {
+            try CLICommand.parse(["search", "--address=ipv4"])
         }
     }
 }
