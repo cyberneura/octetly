@@ -50,6 +50,21 @@ swiftc -swift-version 6 -o /tmp/check \
 バンドルされたリソースを参照するファイル (`grep -rn 'BundledResource' Sources/` で確認) は
 この方法では通らない。その関数だけ除いたコピーを作るか、対象から外す。
 
+ソース全体の型検査だけなら、`Bundle.module` のスタブを足して `-typecheck` に渡せばサンドボックス内でも
+通る。モジュールキャッシュは既定の場所に書けないので指定する。
+
+```shell
+echo 'import Foundation; extension Bundle { static let module = Bundle.main }' > "$TMPDIR/stub.swift"
+swiftc -typecheck -swift-version 6 -target arm64-apple-macosx14.0 -parse-as-library \
+  -module-cache-path "$TMPDIR/modcache" -Xcc -fmodules-cache-path="$TMPDIR/modcache" \
+  $(find Sources/octetly -name '*.swift') "$TMPDIR/stub.swift"
+```
+
+`@Observable` の展開だけは `swift-plugin-server` が sandbox-exec を入れ子にできず落ちる。
+それに連なる 3 種の error は無視してよい: `external macro implementation type ... could not be found`、
+その型を `@State` / `@Bindable` で包む箇所の `The wrapped value must be an object that conforms to
+Observable`、`couldn't create cache file ... xcrun_db`。それ以外の error が 0 なら通っている。
+
 ネットワークの計測を A/B する時は**実行の間に冷却を挟む**。掃引を連続で走らせると
 経路側にスロットルされ、条件と無関係に検出数が変動して比較が成立しない。判定は
 `ping` の並列掃引との同時刻比較で行う。
