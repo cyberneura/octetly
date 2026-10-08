@@ -10,7 +10,7 @@ enum CLICommand: Equatable, Sendable {
     case lookup(targets: [String], json: Bool)
     /// A scan of `range` (the automatic one when nil), keeping the hosts that match `query`
     /// (every host when nil).
-    case search(query: String?, range: ScanRange?, json: Bool)
+    case search(query: String?, range: ScanRange?, output: SearchOutput)
 
     /// The command the arguments name, or nil when they name none and the window should open.
     ///
@@ -31,18 +31,18 @@ enum CLICommand: Equatable, Sendable {
         case "license", "--license":
             return .license
         case "lookup":
-            let options = try Options.parse(rest, command: name, acceptsRange: false)
+            let options = try Options.parse(rest, command: name, acceptsSearchOptions: false)
             guard !options.operands.isEmpty else { throw CLIError.missingTarget }
             return .lookup(targets: options.operands, json: options.json)
         case "search":
-            let options = try Options.parse(rest, command: name, acceptsRange: true)
+            let options = try Options.parse(rest, command: name, acceptsSearchOptions: true)
             // One word rather than the operands joined: a shell that split a quoted name apart
             // would otherwise search for something the user never typed, and an unquoted SMB name
             // with a space in it is the likeliest way to get there.
             guard options.operands.count <= 1 else { throw CLIError.tooManyQueries }
             let query = options.operands.first?.trimmingCharacters(in: .whitespaces)
             return .search(query: query?.isEmpty == false ? query : nil,
-                           range: options.range, json: options.json)
+                           range: options.range, output: try options.searchOutput())
         default:
             return nil
         }
@@ -52,8 +52,21 @@ enum CLICommand: Equatable, Sendable {
         var operands: [String] = []
         var range: ScanRange?
         var json = false
+        var addressesOnly = false
 
-        static func parse(_ arguments: [String], command: String, acceptsRange: Bool) throws -> Options {
+        /// The one format search was asked for. Two is a contradiction rather than a preference,
+        /// so it is refused instead of one of them quietly winning.
+        func searchOutput() throws -> SearchOutput {
+            switch (json, addressesOnly) {
+            case (true, true): throw CLIError.conflictingOptions("--json", "--address")
+            case (true, false): .json
+            case (false, true): .addresses
+            case (false, false): .table
+            }
+        }
+
+        /// `acceptsSearchOptions` admits the options that belong to search alone: --range and --address.
+        static func parse(_ arguments: [String], command: String, acceptsSearchOptions: Bool) throws -> Options {
             var options = Options()
             var index = arguments.startIndex
             var endOfOptions = false
@@ -79,7 +92,10 @@ enum CLICommand: Equatable, Sendable {
                     guard attached == nil else { throw CLIError.unexpectedValue(flag) }
                     options.json = true
                 // A where clause binds to the one pattern before it, so each needs its own.
-                case "--range" where acceptsRange, "-r" where acceptsRange:
+                case "--address" where acceptsSearchOptions, "-a" where acceptsSearchOptions:
+                    guard attached == nil else { throw CLIError.unexpectedValue(flag) }
+                    options.addressesOnly = true
+                case "--range" where acceptsSearchOptions, "-r" where acceptsSearchOptions:
                     let value: String
                     if let attached {
                         value = attached
@@ -103,11 +119,23 @@ enum CLICommand: Equatable, Sendable {
     }
 }
 
+/// How search prints the hosts it kept. Progress and counts go to standard error whichever
+/// this is, so standard output carries the result alone.
+enum SearchOutput: Equatable, Sendable {
+    /// One row per host.
+    case table
+    case json
+    /// One address per host and nothing else, for a shell to substitute or pipe: the IPv4
+    /// address, or the IPv6 address a host with none is most reachable at.
+    case addresses
+}
+
 enum CLIError: LocalizedError, Equatable {
     case missingTarget
     case tooManyQueries
     case missingValue(String)
     case unexpectedValue(String)
+    case conflictingOptions(String, String)
     case unknownOption(String, command: String)
     case badRange(ScanRangeError)
 
@@ -121,6 +149,8 @@ enum CLIError: LocalizedError, Equatable {
             "\(flag) needs a value."
         case .unexpectedValue(let flag):
             "\(flag) does not take a value."
+        case .conflictingOptions(let first, let second):
+            "\(first) and \(second) cannot both be given."
         case .unknownOption(let flag, let command):
             "\(command) has no option \(flag)."
         case .badRange(let error):

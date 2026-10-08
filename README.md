@@ -135,13 +135,14 @@ octetly lookup nas.example.com       # name → IPv4 and IPv6 addresses
 octetly lookup 10.8.0.23 fe80::1%en0  # address → names
 octetly search nas --range 10.8.0.0/24
 octetly search --range 10.8.0.0/24 --json
+octetly search nas --address            # one address per host, nothing else
 ```
 
 **`lookup`** takes names and addresses, as many as are given. A name goes to the system resolver (`getaddrinfo`), which reads `/etc/hosts`, uses the per-domain resolvers a VPN client installs, and asks mDNS for `.local` on this Mac's own segment. An address is named the way a scan names a row. For IPv4 that is reverse DNS, the host's own mDNS responder asked on its port 5353, and SMB — the last two are what get through a router or a tunnel. For IPv6 it is the system resolver alone (reverse DNS for a routable address, mDNS for one on this segment), as it is for a row with no IPv4 address.
 
 **`search`** is for a name the resolver cannot reach, which is the usual state of a `.local` name across a VPN: that query is multicast and goes no further than this Mac's segment. It runs the same scan as the window over `--range` (or the automatic range when none is given), names every host that answers, and prints those whose names (DNS, mDNS, SMB, or the one set in the window), address, MAC address or vendor contain the word, case-insensitively. With no word it prints every host. Names set with the pencil in the window are searched too. Ports are not scanned. The range accepts the same three forms as **Edit Ranges…**, and the IPv6 half is the same all-nodes sweep of this Mac's own segment, whatever the range says.
 
-Progress goes to standard error and results to standard output. `--json` prints them as JSON instead of a table. The exit status is 0 when every lookup found something or the search matched a host, 1 when not, and 2 for a command that could not run.
+Progress goes to standard error and results to standard output. `--json` prints them as JSON instead of a table. `--address` (`-a`) prints one address per host and nothing else — the IPv4 address, or the IPv6 address a host with none is most reachable at, which is what the window's IP Address column shows — so that a shell can substitute or pipe the result. The exit status is 0 when every lookup found something or the search matched a host, 1 when not, and 2 for a command that could not run.
 
 `octetly --license` prints Octetly's license and the third-party notices.
 

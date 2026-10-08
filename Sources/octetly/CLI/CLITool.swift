@@ -9,7 +9,7 @@ import Foundation
 enum CLITool {
     static let usage = """
         usage: octetly lookup [--json] <name | address>...
-               octetly search [--json] [--range <range>] [<word>]
+               octetly search [--json | --address] [--range <range>] [<word>]
                octetly version
                octetly --license
 
@@ -24,11 +24,14 @@ enum CLITool {
                 Use this for a name the resolver cannot reach, such as a .local host on
                 the far side of a VPN. Names set in the window are searched too.
 
-        --range, -r  What to scan: 192.168.0.0/24, 192.168.0.1-192.168.0.99, or one
-                     address. Defaults to this Mac's own network, capped at 1,024 addresses.
-        --json       Print JSON instead of text.
+        --range, -r    What to scan: 192.168.0.0/24, 192.168.0.1-192.168.0.99, or one
+                       address. Defaults to this Mac's own network, capped at 1,024 addresses.
+        --json         Print JSON instead of text.
+        --address, -a  Print one address per host and nothing else, for a shell to
+                       substitute or pipe: the IPv4 address, or the IPv6 address a host
+                       with none is most reachable at.
 
-        --license    Print Octetly's license and the third-party notices.
+        --license      Print Octetly's license and the third-party notices.
 
         Run with no arguments to open the window.
         """
@@ -50,8 +53,8 @@ enum CLITool {
             return 0
         case .lookup(let targets, let json):
             return await lookup(targets, json: json)
-        case .search(let query, let range, let json):
-            return await search(query, in: range, json: json)
+        case .search(let query, let range, let output):
+            return await search(query, in: range, output: output)
         }
     }
 
@@ -179,7 +182,7 @@ enum CLITool {
         }
     }
 
-    private static func search(_ query: String?, in chosen: ScanRange?, json: Bool) async -> Int32 {
+    private static func search(_ query: String?, in chosen: ScanRange?, output: SearchOutput) async -> Int32 {
         guard let range = chosen ?? LocalNetwork.current()?.autoRange else {
             note("no active IPv4 interface to take a range from; pass --range.")
             return 2
@@ -225,10 +228,15 @@ enum CLITool {
             .sorted { $0.addressOrder < $1.addressOrder }
 
         note("\(devices.count.formatted()) found, \(hits.count.formatted()) matching.")
-        if json {
-            guard printJSON(hits.map(SearchResult.init)) else { return 2 }
-        } else {
+        switch output {
+        case .table:
             printTable(hits)
+        case .json:
+            guard printJSON(hits.map(SearchResult.init)) else { return 2 }
+        case .addresses:
+            // The window's IP Address column, not printTable's ADDRESS: that one is IPv4 alone
+            // and would hand a script "—" for a host found over IPv6 only.
+            for device in hits { print(device.displayAddress) }
         }
         return hits.isEmpty ? 1 : 0
     }
