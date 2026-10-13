@@ -14,6 +14,9 @@ struct DeviceNameCell: View {
     private var cell: DeviceCell { DeviceCell(device: device.id, column: .name) }
 
     var body: some View {
+        // Only a real name: without one the cell shows the address in its place, which the
+        // address column already offers.
+        let showsCopy = device.hasName && copier.showsButton(for: cell)
         HStack(spacing: 6) {
             // Split rather than a Label so the icon can carry the "this is you" tint without the
             // name text taking it too.
@@ -31,13 +34,16 @@ struct DeviceNameCell: View {
                     .background(.quaternary, in: Capsule())
             }
             Spacer(minLength: 4)
-            // Only a real name: without one the cell shows the address in its place, which the
-            // address column already offers.
-            if device.hasName, copier.showsButton(for: cell) {
-                CellCopyButton(copied: copier.copied == cell) {
-                    copier.copy(device.displayName, from: cell)
+                // Laid over the spacer rather than placed in the row, like CopyableCell's, so a
+                // hover does not change the row's height.
+                .padding(.trailing, showsCopy ? CellCopyButton.reservedWidth : 0)
+                .overlay(alignment: .trailing) {
+                    if showsCopy {
+                        CellCopyButton(copied: copier.copied == cell) {
+                            copier.copy(device.displayName, from: cell)
+                        }
+                    }
                 }
-            }
             Button {
                 draft = device.customName
                 editingID = device.id

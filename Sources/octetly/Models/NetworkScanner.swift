@@ -8,8 +8,14 @@ final class NetworkScanner {
     var isScanning = false
     var status = "Ready to scan"
     var progress: ScanProgress?
-    var selectedDeviceID: Device.ID? {
+    var selectedDeviceIDs: Set<Device.ID> = [] {
         didSet { reconcileSelectionScan() }
+    }
+    /// The device the detail pane and the selection port scan are about: only a single selection
+    /// has one. Scanning every host of a range selection at once would be the full port scan the
+    /// settings leave off by default.
+    var selectedDeviceID: Device.ID? {
+        selectedDeviceIDs.count == 1 ? selectedDeviceIDs.first : nil
     }
     /// The interface this Mac would scan from. Re-read rather than cached for the life of the
     /// app, since it changes with Wi-Fi and with a VPN coming up.
@@ -88,6 +94,10 @@ final class NetworkScanner {
     func stop() {
         scanTask?.cancel()
         scanTask = nil
+        // Stopping makes the list final as finishing does, and no publish or finish follows to
+        // drop the rows it never reached from the selection. Before the cancel: narrowing the
+        // selection to one row starts that row's port scan, which a stop must not leave running.
+        pruneSelection()
         cancelPortScans()
         resetScanningPorts()
         progress = nil
@@ -99,7 +109,7 @@ final class NetworkScanner {
     /// for that".
     ///
     /// Its inputs are the selection, the device list and the port scan mode, so it is re-checked
-    /// whenever any of the three moves: from `selectedDeviceID`'s observer, from `publish`, and
+    /// whenever any of the three moves: from `selectedDeviceIDs`' observer, from `publish`, and
     /// from the settings store's callback. Written as a condition to restore rather than as a
     /// handler for one event, because every defect found in this area was a state change that
     /// nobody had thought to hang a handler on.
@@ -132,6 +142,10 @@ final class NetworkScanner {
         devices[index].portScanState = .scanning
         let address = devices[index].reachableAddress
         portTasks[id] = Task {
+            // A task cancelled before it first runs still runs its body, and nothing below here
+            // looks at cancellation before connecting. Stop cancels, in the same turn, the scan
+            // its own prune of the selection has just started.
+            guard !Task.isCancelled else { return }
             let open = await PortScanner.openPorts(host: address)
             // Checked before touching portTasks: a cancelled task must not clear the entry a
             // newer scan of the same host has since put there, which would let a second scan
@@ -225,8 +239,9 @@ final class NetworkScanner {
     }
 
     private func pruneSelection() {
-        guard let id = selectedDeviceID, !devices.contains(where: { $0.id == id }) else { return }
-        selectedDeviceID = nil
+        let present = selectedDeviceIDs.intersection(devices.map(\.id))
+        // Assigned only when something left, since every assignment re-checks the port scan.
+        if present.count != selectedDeviceIDs.count { selectedDeviceIDs = present }
     }
 
     private func finish(_ snapshot: ScanSnapshot) {

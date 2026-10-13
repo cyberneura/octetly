@@ -71,12 +71,15 @@ struct CopyableCell<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        HStack(spacing: 4) {
-            content.frame(maxWidth: .infinity, alignment: alignment)
-            if let text, copier.showsButton(for: cell) {
-                CellCopyButton(copied: copier.copied == cell) { copier.copy(text, from: cell) }
+        let showsButton = text != nil && copier.showsButton(for: cell)
+        content
+            .frame(maxWidth: .infinity, alignment: alignment)
+            .padding(.trailing, showsButton ? CellCopyButton.reservedWidth : 0)
+            .overlay(alignment: .trailing) {
+                if let text, showsButton {
+                    CellCopyButton(copied: copier.copied == cell) { copier.copy(text, from: cell) }
+                }
             }
-        }
         // The whole cell, not just the glyphs, so the button does not vanish between words.
         .contentShape(Rectangle())
         .onHover { copier.pointer(isInside: $0, cell) }
@@ -84,13 +87,21 @@ struct CopyableCell<Content: View>: View {
 }
 
 /// The copy button, which turns into a checkmark once it has copied.
+///
+/// Laid over its cell rather than beside it: the button is a little taller than a line of text,
+/// so taking part in layout would grow the row while it is hovered and make the table relay out
+/// every row under it. The cell gives up `reservedWidth` of its text instead.
 struct CellCopyButton: View {
     let copied: Bool
     let action: () -> Void
 
+    static let width: CGFloat = 16
+    static let reservedWidth: CGFloat = width + 4
+
     var body: some View {
         Button(action: action) {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .frame(width: Self.width)
         }
         .buttonStyle(.borderless)
         .foregroundStyle(.secondary)
