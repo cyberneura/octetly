@@ -102,7 +102,7 @@ enum CLITool {
         // it has no address.
         if results.contains(where: { $0.failure != nil }) { return 2 }
         let missed = results.filter { !$0.found }
-        if missed.contains(where: { $0.kind == "name" }) {
+        if !json, missed.contains(where: { $0.kind == "name" }) {
             note("the system resolver has no address for a name above. A .local name on the far "
                  + "side of a router or a VPN cannot be resolved this way; "
                  + "try `octetly search <word> --range <network>` instead.")
@@ -187,7 +187,10 @@ enum CLITool {
             note("no active IPv4 interface to take a range from; pass --range.")
             return 2
         }
-        note("scanning \(range.summary)…")
+        // Output meant for a program says nothing but the result; only errors reach standard
+        // error then. The table is for a person, who is told what is being scanned.
+        let reportsProgress = output == .table
+        if reportsProgress { note("scanning \(range.summary)…") }
 
         // Ports are never scanned here: nothing printed uses them, and on a busy range they cost
         // more than the rest of the scan put together.
@@ -227,7 +230,7 @@ enum CLITool {
             .filter { Self.matches($0, query) }
             .sorted { $0.addressOrder < $1.addressOrder }
 
-        note("\(devices.count.formatted()) found, \(hits.count.formatted()) matching.")
+        if reportsProgress { note("\(devices.count.formatted()) found, \(hits.count.formatted()) matching.") }
         switch output {
         case .table:
             printTable(hits)

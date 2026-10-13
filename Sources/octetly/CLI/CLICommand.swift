@@ -119,8 +119,9 @@ enum CLICommand: Equatable, Sendable {
     }
 }
 
-/// How search prints the hosts it kept. Progress and counts go to standard error whichever
-/// this is, so standard output carries the result alone.
+/// How search prints the hosts it kept. Standard output carries the result alone in every case.
+/// Only `.table` adds progress and counts on standard error; the other two are read by a program,
+/// so standard error carries nothing but errors.
 enum SearchOutput: Equatable, Sendable {
     /// One row per host.
     case table
