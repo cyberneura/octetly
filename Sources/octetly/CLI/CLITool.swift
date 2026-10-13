@@ -9,7 +9,7 @@ import Foundation
 enum CLITool {
     static let usage = """
         usage: octetly lookup [--json] <name | address>...
-               octetly search [--json | --address] [--range <range>] [<word>]
+               octetly search [--json | --address] [--range <range>] [--cache] [<word>]
                octetly version
                octetly --license
 
@@ -25,7 +25,9 @@ enum CLITool {
                 the far side of a VPN. Names set in the window are searched too.
 
         --range, -r    What to scan: 192.168.0.0/24, 192.168.0.1-192.168.0.99, or one
-                       address. Defaults to this Mac's own network, capped at 1,024 addresses.
+                       address. Explicit ranges only return hosts with an IPv4 in that range.
+                       Defaults to this Mac's own network, capped at 1,024 addresses.
+        --cache        Revalidate previous IPv4 name matches first; scan normally if they fail.
         --json         Print JSON instead of text.
         --address, -a  Print one address per host and nothing else, for a shell to
                        substitute or pipe: the IPv4 address, or the IPv6 address a host
@@ -53,8 +55,8 @@ enum CLITool {
             return 0
         case .lookup(let targets, let json):
             return await lookup(targets, json: json)
-        case .search(let query, let range, let output):
-            return await search(query, in: range, output: output)
+        case .search(let query, let range, let output, let cache):
+            return await search(query, in: range, output: output, cache: cache)
         }
     }
 
@@ -154,7 +156,7 @@ enum CLITool {
 
     // MARK: - search
 
-    private static func search(_ query: String?, in chosen: ScanRange?, output: SearchOutput) async -> Int32 {
+    private static func search(_ query: String?, in chosen: ScanRange?, output: SearchOutput, cache: Bool) async -> Int32 {
         guard let range = chosen ?? LocalNetwork.current()?.autoRange else {
             note("no active IPv4 interface to take a range from; pass --range.")
             return 2
@@ -162,6 +164,27 @@ enum CLITool {
         // Output meant for a program says nothing but the result; only errors reach standard
         // error then. The table is for a person, who is told what is being scanned.
         let reportsProgress = output == .table
+        let store = SearchCache()
+        if cache, let query, let entries = store.load(query: query, range: range, explicitRange: chosen != nil) {
+            var verified: [Device] = []
+            for entry in entries {
+                async let ping = CommandRunner.runChecked("/sbin/ping", ["-n", "-c", "2", "-W", "1000", entry.ipv4], timeout: 3)
+                async let identity = ScanEngine.identity(of: entry.ipv4, directNamesOnly: true)
+                let (reply, names) = await (ping, identity)
+                guard reply.completed, SearchPolicy.matchesName(names, query: query) else { break }
+                var device = Device(ipv4: entry.ipv4, discovery: [.icmpEcho])
+                device.hostname = names.hostname
+                device.dnsName = names.dnsName
+                device.mdnsName = names.mdnsName
+                device.smbName = names.smbName
+                device.smbDomain = names.smbDomain
+                verified.append(device)
+            }
+            if verified.count == entries.count {
+                if reportsProgress { note("returning \(verified.count) revalidated cached hosts.") }
+                return printSearch(verified, output: output)
+            }
+        }
         if reportsProgress { note("scanning \(range.summary)…") }
 
         // Ports are never scanned here: nothing printed uses them, and on a busy range they cost
@@ -170,7 +193,7 @@ enum CLITool {
         var devices: [String: Device] = [:]
         var identities: [String: DeviceIdentity] = [:]
         for await event in ScanEngine.events(range: range, vendorDatabase: OUIDatabase.loadBundled(),
-                                             settings: settings) {
+                                             settings: settings, includeIPv6: chosen == nil) {
             switch event {
             case .devices(let list):
                 // Each list is the engine's whole table so far, so the latest copy of a row wins.
@@ -199,10 +222,18 @@ enum CLITool {
                 device.customName = named.isEmpty ? annotations[device.addressAnnotationKey].name : named
                 return device
             }
+            .filter { SearchPolicy.includes($0, explicitRange: chosen) }
             .filter { Self.matches($0, query) }
             .sorted { $0.addressOrder < $1.addressOrder }
 
         if reportsProgress { note("\(devices.count.formatted()) found, \(hits.count.formatted()) matching.") }
+        if cache, let query {
+            store.save(hits, query: query, range: range, explicitRange: chosen != nil)
+        }
+        return printSearch(hits, output: output)
+    }
+
+    private static func printSearch(_ hits: [Device], output: SearchOutput) -> Int32 {
         switch output {
         case .table:
             printTable(hits)

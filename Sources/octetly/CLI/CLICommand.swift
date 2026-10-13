@@ -10,7 +10,7 @@ enum CLICommand: Equatable, Sendable {
     case lookup(targets: [String], json: Bool)
     /// A scan of `range` (the automatic one when nil), keeping the hosts that match `query`
     /// (every host when nil).
-    case search(query: String?, range: ScanRange?, output: SearchOutput)
+    case search(query: String?, range: ScanRange?, output: SearchOutput, cache: Bool = false)
 
     /// The command the arguments name, or nil when they name none and the window should open.
     ///
@@ -42,7 +42,7 @@ enum CLICommand: Equatable, Sendable {
             guard options.operands.count <= 1 else { throw CLIError.tooManyQueries }
             let query = options.operands.first?.trimmingCharacters(in: .whitespaces)
             return .search(query: query?.isEmpty == false ? query : nil,
-                           range: options.range, output: try options.searchOutput())
+                           range: options.range, output: try options.searchOutput(), cache: options.cache)
         default:
             return nil
         }
@@ -53,6 +53,7 @@ enum CLICommand: Equatable, Sendable {
         var range: ScanRange?
         var json = false
         var addressesOnly = false
+        var cache = false
 
         /// The one format search was asked for. Two is a contradiction rather than a preference,
         /// so it is refused instead of one of them quietly winning.
@@ -88,6 +89,9 @@ enum CLICommand: Equatable, Sendable {
                 let flag = String(parts[0])
                 let attached = parts.count > 1 ? String(parts[1]) : nil
                 switch flag {
+                case "--cache" where acceptsSearchOptions:
+                    guard attached == nil else { throw CLIError.unexpectedValue(flag) }
+                    options.cache = true
                 case "--json":
                     guard attached == nil else { throw CLIError.unexpectedValue(flag) }
                     options.json = true
