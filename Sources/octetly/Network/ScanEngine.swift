@@ -104,11 +104,12 @@ enum ScanEngine {
     static func events(
         range: ScanRange,
         vendorDatabase: OUIDatabase,
-        settings: ScanSettings
+        settings: ScanSettings,
+        includeIPv6: Bool = true
     ) -> AsyncStream<ScanEvent> {
         AsyncStream { continuation in
             let task = Task {
-                await scan(range: range, vendorDatabase: vendorDatabase, settings: settings) {
+                await scan(range: range, vendorDatabase: vendorDatabase, settings: settings, includeIPv6: includeIPv6) {
                     continuation.yield($0)
                 }
                 continuation.finish()
@@ -121,6 +122,7 @@ enum ScanEngine {
         range: ScanRange,
         vendorDatabase: OUIDatabase,
         settings: ScanSettings,
+        includeIPv6: Bool,
         emit: @escaping @Sendable (ScanEvent) -> Void
     ) async {
         let hosts = range.addressList()
@@ -356,7 +358,7 @@ enum ScanEngine {
             // Skipped where the ARP read above was cut short. The IPv6 merge matches replies to
             // existing rows by hardware address, so rows the torn read left without one would not
             // be recognised, and every host behind them would get a second row.
-            if !Task.isCancelled, arpWasComplete, let network {
+            if includeIPv6, !Task.isCancelled, arpWasComplete, let network {
                 let added = await discoverIPv6(on: network, vendorDatabase: vendorDatabase,
                                                devices: &devices, emit: emit)
                 for id in added { enqueue.yield(id) }
@@ -700,7 +702,7 @@ enum ScanEngine {
 
     // MARK: - Naming
 
-    static func identity(of address: String) async -> DeviceIdentity {
+    static func identity(of address: String, directNamesOnly: Bool = false) async -> DeviceIdentity {
         // dig(1) asks the configured unicast resolver, and no link-local address has a delegation
         // in ip6.arpa for it to find, so the whole child process can only ever come back empty for
         // one. getnameinfo goes through the system resolver instead, which asks mDNSResponder, and
@@ -708,7 +710,7 @@ enum ScanEngine {
         guard IPv4.number(address) != nil else {
             return DeviceIdentity(mdnsName: await BlockingWork.run { systemName(of: address) })
         }
-        async let names = reverseNames(address)
+        async let names = reverseNames(address, directNamesOnly: directNamesOnly)
         async let smb = smbIdentity(address)
         let (resolved, share) = await (names, smb)
         return DeviceIdentity(dnsName: resolved.dns, mdnsName: resolved.mdns,
@@ -749,9 +751,11 @@ enum ScanEngine {
     /// namespace and not a source: `.local` can come out of a configured zone, a cache, or a relay,
     /// none of which is evidence that the host answers to it now. So a relayed one is kept only as
     /// what to show when the host itself says nothing.
-    private static func reverseNames(_ address: String) async -> (dns: String, mdns: String) {
+    private static func reverseNames(_ address: String, directNamesOnly: Bool) async -> (dns: String, mdns: String) {
         let dns = await digName(["+short", "-x", address])
-        return (dns, DNSName.multicastName(dns: dns, responder: await responderName(address)))
+        let responder = await responderName(address)
+        // Cache validation must not treat a stale .local PTR as a reply from the host.
+        return (dns, directNamesOnly ? responder : DNSName.multicastName(dns: dns, responder: responder))
     }
 
     /// One dig(1) query, or "—" where it did not answer one.
