@@ -154,34 +154,6 @@ enum CLITool {
 
     // MARK: - search
 
-    private struct SearchResult: Encodable {
-        var ipv4: String?
-        var ipv6: [String]
-        var name: String?
-        var customName: String?
-        var dnsName: String?
-        var mdnsName: String?
-        var smbName: String?
-        var smbDomain: String?
-        var macAddress: String?
-        var vendor: String?
-        var latencyMilliseconds: Double?
-
-        init(_ device: Device) {
-            ipv4 = device.ipv4
-            ipv6 = device.ipv6Addresses
-            name = device.hasName ? device.displayName : nil
-            customName = device.customName.isEmpty ? nil : device.customName
-            dnsName = present(device.dnsName)
-            mdnsName = present(device.mdnsName)
-            smbName = present(device.smbName)
-            smbDomain = present(device.smbDomain)
-            macAddress = present(device.macAddress)
-            vendor = knownVendor(of: device)
-            latencyMilliseconds = device.latencyMilliseconds
-        }
-    }
-
     private static func search(_ query: String?, in chosen: ScanRange?, output: SearchOutput) async -> Int32 {
         guard let range = chosen ?? LocalNetwork.current()?.autoRange else {
             note("no active IPv4 interface to take a range from; pass --range.")
@@ -235,7 +207,7 @@ enum CLITool {
         case .table:
             printTable(hits)
         case .json:
-            guard printJSON(hits.map(SearchResult.init)) else { return 2 }
+            guard printJSON(hits.map(DeviceRecord.init)) else { return 2 }
         case .addresses:
             // The window's IP Address column, not printTable's ADDRESS: that one is IPv4 alone
             // and would hand a script "—" for a host found over IPv6 only.
@@ -280,26 +252,12 @@ enum CLITool {
     /// false when nothing could be printed, so that the exit status does not report a result the
     /// caller never received.
     private static func printJSON(_ value: some Encodable) -> Bool {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         do {
-            print(String(decoding: try encoder.encode(value), as: UTF8.self))
+            print(String(decoding: try DeviceExport.jsonEncoder().encode(value), as: UTF8.self))
             return true
         } catch {
             note("could not write JSON: \(error.localizedDescription)")
             return false
         }
     }
-}
-
-/// nil for the "—" the scan uses to mean nothing was found, so JSON carries no placeholder.
-private func present(_ value: String) -> String? {
-    value == DNSName.none || value.isEmpty ? nil : value
-}
-
-/// The vendor, keeping `Randomized`. `Device.hasVendor` treats it as missing because the window
-/// styles it like an unknown one, but it is a finding — the address was never assigned — and
-/// `search Randomized` matches on it, so hiding it would leave rows with no visible reason.
-private func knownVendor(of device: Device) -> String? {
-    device.vendor == OUIDatabase.unknownVendor ? nil : device.vendor
 }

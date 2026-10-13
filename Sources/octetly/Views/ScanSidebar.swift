@@ -91,7 +91,6 @@ struct ScanSidebar: View {
                       systemImage: scanner.isScanning ? "stop.fill" : "arrow.clockwise")
                     .frame(maxWidth: .infinity)
             }
-            .keyboardShortcut("r", modifiers: .command)
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
             .padding(.top, 4)

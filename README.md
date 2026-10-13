@@ -24,6 +24,10 @@ universal binary, the resource bundle, an icon, and the `Info.plist` in `packagi
 
 The window is three panes: scan controls on the left, results in the middle, and details on the right for whichever device is selected. Click **Scan** (or press Command-R). The initial scan may trigger macOS's Local Network privacy prompt.
 
+The toolbar buttons hide and show the side panes (Control-Command-S for the left, Option-Command-I for the right). The left pane stays open until a scan has found something, since until then it is all the window has to offer. Shift-click selects a range of rows and Command-click adds or removes one; with more than one selected, the right pane shows only how many.
+
+**Export** (Shift-Command-E) writes the selected rows, or every row the table shows when none is selected, as CSV or JSON, to a file or to the clipboard. The JSON is the same as `octetly search --json` prints, plus `openPorts` for a host whose ports were scanned; a field with nothing found is left out of the JSON (except `ipv6`, which is always a list, and `openPorts`, which is an empty list when a port scan found none open) and empty in the CSV. A CSV cell that a spreadsheet would read as a formula — one starting with `=`, `+`, `-`, `@`, a tab or a carriage return — is written with a leading `'`, since names come from the devices on the network.
+
 ## How a scan runs
 
 Rows appear as they are found rather than at the end. The progress bar follows each phase in turn — discovery, the round-trip timing after it, the IPv6 sweep, and the port sweep if one is configured to follow.
@@ -86,7 +90,7 @@ In the left pane, and under Command-comma:
 
 A port that is firewalled answers nothing, so it costs the full 0.6 s timeout. Scanning every host found on a busy `/24` therefore adds several seconds, which is why the default waits until a device is actually selected.
 
-Selecting a device scans that one host, and selecting another cancels the first, so `Port scan sockets` has nothing to pace in that mode — it applies to `After the scan finishes`.
+Selecting a device scans that one host (selecting several scans none), and selecting another cancels the first, so `Port scan sockets` has nothing to pace in that mode — it applies to `After the scan finishes`.
 
 ## Scan ranges
 

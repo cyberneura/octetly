@@ -3,28 +3,33 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var scanner: NetworkScanner
     @State private var editingRanges = false
+    @State private var exporting = false
     @State private var sortOrder = [KeyPathComparator(\Device.addressOrder)]
     @State private var searchText = ""
     @State private var renamingID: Device.ID?
     @State private var copier = CellCopier()
     /// Trails scanner.progress so growth can be animated and a reset cannot be.
     @State private var shownFraction: Double = 0
+    @AppStorage("showsSidebar") private var showsSidebar = true
+    @AppStorage("showsInspector") private var showsInspector = true
 
     var body: some View {
         VStack(spacing: 0) {
             HSplitView {
-                ScanSidebar(scanner: scanner,
-                            ranges: scanner.ranges,
-                            settings: scanner.settings,
-                            editingRanges: $editingRanges)
-                    .frame(minWidth: 180, idealWidth: 200, maxWidth: 240)
-                    .frame(maxHeight: .infinity)
+                if sidebarShown {
+                    ScanSidebar(scanner: scanner,
+                                ranges: scanner.ranges,
+                                settings: scanner.settings,
+                                editingRanges: $editingRanges)
+                        .frame(minWidth: 180, idealWidth: 200, maxWidth: 240)
+                        .frame(maxHeight: .infinity)
+                }
 
                 deviceTable
 
                 // The pane is absent rather than empty when nothing is selected, so the table gets
                 // the whole window until there is something to show beside it.
-                if selectedDevice != nil {
+                if showsInspector && (selectedDevice != nil || scanner.selectedDeviceIDs.count > 1) {
                     inspector
                 }
             }
@@ -37,11 +42,84 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Octetly")
         .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                scanButton
+                exportButton
+                sidebarToggle
+                inspectorToggle
+            }
             ToolbarItem(placement: .primaryAction) { searchField }
         }
         .sheet(isPresented: $editingRanges) {
             ScanRangeEditor(store: scanner.ranges)
         }
+        .sheet(isPresented: $exporting) {
+            ExportSheet(devices: exportedRows, selectionOnly: !selectedRows.isEmpty)
+        }
+    }
+
+    /// Forced on while there is nothing to look at but the sidebar, since it holds the target
+    /// and the options. A scan in progress does not count as nothing: rescanning empties the list
+    /// first, and a hidden sidebar would otherwise flash back in for the moment before the first
+    /// host arrives.
+    private var sidebarForced: Bool { scanner.devices.isEmpty && !scanner.isScanning }
+
+    private var sidebarShown: Bool { showsSidebar || sidebarForced }
+
+    /// Here rather than only in the sidebar, which can be hidden; this also carries ⌘R, so the
+    /// shortcut does not leave with the sidebar either.
+    private var scanButton: some View {
+        Button {
+            scanner.isScanning ? scanner.stop() : scanner.scan()
+        } label: {
+            Label(scanner.isScanning ? "Stop" : "Scan",
+                  systemImage: scanner.isScanning ? "stop.fill" : "arrow.clockwise")
+        }
+        .keyboardShortcut("r", modifiers: .command)
+        .help(scanner.isScanning ? "Stop scanning (⌘R)" : "Scan (⌘R)")
+    }
+
+    private var exportButton: some View {
+        Button {
+            exporting = true
+        } label: {
+            Label("Export", systemImage: "square.and.arrow.up")
+        }
+        .keyboardShortcut("e", modifiers: [.shift, .command])
+        .disabled(rows.isEmpty)
+        .help("Export the selected devices, or all shown, as CSV or JSON (⇧⌘E)")
+    }
+
+    /// In table order, not selection order, so an export reads like the rows it came from.
+    private var selectedRows: [Device] {
+        rows.filter { scanner.selectedDeviceIDs.contains($0.id) }
+    }
+
+    private var exportedRows: [Device] {
+        let selected = selectedRows
+        return selected.isEmpty ? rows : selected
+    }
+
+    private var sidebarToggle: some View {
+        Button {
+            showsSidebar.toggle()
+        } label: {
+            Label(sidebarShown ? "Hide Sidebar" : "Show Sidebar", systemImage: "sidebar.left")
+        }
+        .keyboardShortcut("s", modifiers: [.control, .command])
+        .disabled(sidebarForced)
+        .help(sidebarForced ? "The sidebar stays open until a scan has found something"
+              : sidebarShown ? "Hide Sidebar (⌃⌘S)" : "Show Sidebar (⌃⌘S)")
+    }
+
+    private var inspectorToggle: some View {
+        Button {
+            showsInspector.toggle()
+        } label: {
+            Label(showsInspector ? "Hide Details" : "Show Details", systemImage: "sidebar.right")
+        }
+        .keyboardShortcut("i", modifiers: [.option, .command])
+        .help(showsInspector ? "Hide Details (⌥⌘I)" : "Show Details (⌥⌘I)")
     }
 
     private var selectedDevice: Device? {
@@ -61,9 +139,6 @@ struct ContentView: View {
             // toolbar's height, leaving a blank band above it. With it, the toolbar becomes a
             // strip of its own across the whole window and the header sits directly beneath.
             .ignoresSafeArea(edges: .top)
-            // Ignoring the safe area tells SwiftUI only; AppKit would still inset the rows by the
-            // title bar's height and leave a gap under the header. See TableInsetsReset.
-            .background(TableInsetsReset())
             .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -93,7 +168,7 @@ struct ContentView: View {
     }
 
     private var table: some View {
-        Table(rows, selection: $scanner.selectedDeviceID, sortOrder: $sortOrder) {
+        Table(rows, selection: $scanner.selectedDeviceIDs, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.displayName) { device in
                 DeviceNameCell(device: device, editingID: $renamingID, copier: copier) { name in
                     scanner.rename(device.id, to: name)
@@ -195,6 +270,11 @@ struct ContentView: View {
         Group {
             if let device = selectedDevice {
                 DeviceDetailView(device: device, annotations: scanner.annotations)
+            } else if scanner.selectedDeviceIDs.count > 1 {
+                // Kept open rather than closed for a multiple selection, so extending a selection
+                // with Shift or Command does not make the table jump wider and back.
+                ContentUnavailableView("\(scanner.selectedDeviceIDs.count) Devices Selected",
+                                       systemImage: "square.stack")
             }
         }
         .frame(minWidth: 250, idealWidth: 290, maxWidth: 400)

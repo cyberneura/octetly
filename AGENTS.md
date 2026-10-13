@@ -24,7 +24,7 @@ swift run Octetly
 
 `Tests/OctetlyTests/` に swift-testing のテストがある。対象は入力を解釈する純粋な
 ロジックと、掃引の設定を決める純粋関数 (`ScanRange` / `IPv4` / `IPv6` / `OUIDatabase` /
-`NeighbourCache` / `Device` / `DeviceIdentity` / `DNSName` / `SweepProfile` /
+`NeighbourCache` / `Device` / `DeviceIdentity` / `DeviceExport` / `DNSName` / `SweepProfile` /
 `ICMPPinger.sendWindow` / `EchoPinger.reportableRoundTrip`) で、UI とネットワーク I/O は
 入っていない。`CommandLineTool` だけは一時フォルダに実際にリンクを張って検査する。
 `Network/` の中でもソケットに触らないものはテスト対象にする。ソケットや
