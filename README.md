@@ -2,6 +2,8 @@
 
 Octetly is a native macOS LAN scanner built with SwiftUI and AppKit. It finds hosts with ICMP echo requests, ICMPv6 to the all-nodes multicast group, and the system ARP cache, fills in further addresses from the NDP cache, and displays addresses, hardware identity, network names, and common remote-access/web ports.
 
+Website: https://www.cyberneura.com/app/octetly
+
 ## Install
 
 ```sh
