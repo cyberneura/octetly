@@ -91,8 +91,7 @@ Observable`、`couldn't create cache file ... xcrun_db`。それ以外の error 
 ## 配布物
 
 `swift run` / `swift build` が作るのは .app バンドルではない。配布する .app は
-`scripts/make-app.sh` が組み立てる (universal バイナリ + リソース + AppIcon.png から
-起こした .icns + `packaging/Info.plist`)。dmg は `scripts/make-dmg.sh`。署名と公証は
+`scripts/make-app.sh` が組み立てる (universal バイナリ + リソース + サイズ別の icon.icns / Assets.car + `packaging/Info.plist`)。dmg は `scripts/make-dmg.sh`。署名と公証は
 `.github/workflows/release.yml` が行い、手元では署名なしの .app ができる。
 
 version の出どころは**リポジトリ直下の `VERSION` ファイル 1 つ**。`Info.plist` の
@@ -161,3 +160,13 @@ scripts/generate-third-party-notices.sh
 ## 課題管理
 
 `_issues/<YYYYMMDD>-<概要>/ISSUE.md`。`.gitignore` に入れてあるのでコミットされない。
+
+## macOS app icon
+
+Run `bash scripts/generate-macos-icons.sh` with Xcode on macOS. Fixed artwork,
+layout measurements, size-specific sources and the verification command are in
+`resources/app-icons/README.md`. Small @1x backgrounds reach the canvas edges;
+the glyph fits inside the central 80%. Larger backgrounds have 10% outer margins.
+Do not replace the generated ICNS with `tauri icon` / `iconutil`: preserve the
+ARGB small entries and the matching Assets.car / CFBundleIconName registration.
+Native rendering is verified by `.github/workflows/macos-icons.yml`.

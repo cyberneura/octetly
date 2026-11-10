@@ -111,24 +111,8 @@ for notice in LICENSE.txt THIRD-PARTY-NOTICES.txt; do
   fi
 done
 
-# The .icns is generated rather than committed: AppIcon.png is the master, and a
-# second copy of it in another format is a second thing to keep in step.
-# The master is 512x512, so the 1024 slot is left out rather than filled by
-# upscaling -- macOS falls back to the largest size present.
-ICONSET=$(mktemp -d)/AppIcon.iconset
-mkdir -p "$ICONSET"
-MASTER="Sources/octetly/Resources/AppIcon.png"
-sips -z 16 16     "$MASTER" --out "$ICONSET/icon_16x16.png"      >/dev/null
-sips -z 32 32     "$MASTER" --out "$ICONSET/icon_16x16@2x.png"   >/dev/null
-sips -z 32 32     "$MASTER" --out "$ICONSET/icon_32x32.png"      >/dev/null
-sips -z 64 64     "$MASTER" --out "$ICONSET/icon_32x32@2x.png"   >/dev/null
-sips -z 128 128   "$MASTER" --out "$ICONSET/icon_128x128.png"    >/dev/null
-sips -z 256 256   "$MASTER" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
-sips -z 256 256   "$MASTER" --out "$ICONSET/icon_256x256.png"    >/dev/null
-sips -z 512 512   "$MASTER" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
-sips -z 512 512   "$MASTER" --out "$ICONSET/icon_512x512.png"    >/dev/null
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
-rm -rf "$(dirname "$ICONSET")"
+# Use the verified size-specific ICNS and matching asset catalog.
+cp packaging/icons/icon.icns packaging/icons/Assets.car "$APP/Contents/Resources/"
 
 sed "s/__VERSION__/${VERSION}/g" packaging/Info.plist > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null

@@ -27,7 +27,7 @@
 	<key>CFBundleVersion</key>
 	<string>__VERSION__</string>
 	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
+	<string>icon.icns</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSApplicationCategoryType</key>
@@ -41,5 +41,6 @@
 	-->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Octetly lists the devices on your local network, so it has to reach them.</string>
+    <key>CFBundleIconName</key><string>Octetly</string>
 </dict>
 </plist>
