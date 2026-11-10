@@ -28,3 +28,9 @@ because two equally framed app fixtures can otherwise agree and both be wrong.
 
 The original raster is 512px. The required 1024px slot is upscaled for
 container compatibility; this does not add detail to the original design.
+
+Artwork is decoded with ImageIO, preserving embedded profiles, and drawn into
+explicit sRGB buffers. PNG export must retain an sRGB chunk; avoid a PNG
+encode/decode round trip through NSBitmapImageRep, which can re-export
+`gAMA=2.2` and make dark colors pale in other decoders. The shared helper rejects
+missing sRGB or conflicting gamma/ICC metadata before native verification.
