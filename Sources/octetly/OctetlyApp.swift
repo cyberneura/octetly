@@ -53,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func applyDockIcon() {
         guard Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") == nil else { return }
-        guard let url = BundledResource.url(forResource: "AppIcon", withExtension: "png"),
+        guard let url = BundledResource.url(forResource: "icon", withExtension: "icns"),
               let icon = NSImage(contentsOf: url) else { return }
         NSApp.applicationIconImage = icon
     }
