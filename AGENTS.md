@@ -1,57 +1,59 @@
 # Octetly
 
-macOS の LAN スキャナ。SwiftUI + AppKit、SwiftPM パッケージ (実行ファイル 1 つ)。
-Swift 6.2 / macOS 14 以上、swiftLanguageModes は .v6 (strict concurrency)。
+A LAN scanner for macOS. SwiftUI + AppKit, a SwiftPM package (one executable).
+Swift 6.2 / macOS 14 or later, swiftLanguageModes is .v6 (strict concurrency).
 
-機能と設計判断は README.md に書いてある。ここには作業手順だけを置く。
+Features and design decisions are written in README.md. Only working procedures live here.
 
-## ビルドと実行
+## Build and run
 
 ```shell
 swift build
 swift run Octetly
 ```
 
-よく使うタスクは `.jj-menu.yaml` に入れてある (`jj-menu` で開く)。ARP/NDP キャッシュの
-生ダンプと、ローカルネットワーク権限の設定を開く項目もそこにある。
+Frequently used tasks are in `.jj-menu.yaml` (open it with `jj-menu`). It also has items that
+dump the raw ARP/NDP cache and open the Local Network permission settings.
 
-**Claude Code のサンドボックス下では `swift build` が通らない。** SwiftPM は
-マニフェストのコンパイルを自前の `sandbox-exec` の中で実行するが、それを入れ子に
-できず `sandbox_apply: Operation not permitted` で落ちる。Bash ツールの
-`dangerouslyDisableSandbox: true` で実行すれば通る (`swift test` と `.build/debug/Octetly` の起動も同じ)。
+**`swift build` does not work under the Claude Code sandbox.** SwiftPM compiles the
+manifest inside its own `sandbox-exec`, which cannot be nested, so it fails with
+`sandbox_apply: Operation not permitted`. Running it with the Bash tool's
+`dangerouslyDisableSandbox: true` works (the same applies to `swift test` and launching `.build/debug/Octetly`).
 
-## テスト
+## Tests
 
-`Tests/OctetlyTests/` に swift-testing のテストがある。対象は入力を解釈する純粋な
-ロジックと、掃引の設定を決める純粋関数 (`ScanRange` / `IPv4` / `IPv6` / `OUIDatabase` /
+`Tests/OctetlyTests/` contains swift-testing tests. They cover the pure logic that interprets
+input and the pure functions that decide sweep settings (`ScanRange` / `IPv4` / `IPv6` / `OUIDatabase` /
 `NeighbourCache` / `Device` / `DeviceIdentity` / `DeviceExport` / `DNSName` / `SweepProfile` /
-`ICMPPinger.sendWindow` / `EchoPinger.reportableRoundTrip`) で、UI とネットワーク I/O は
-入っていない。`CommandLineTool` だけは一時フォルダに実際にリンクを張って検査する。
-`Network/` の中でもソケットに触らないものはテスト対象にする。ソケットや
-子プロセスと同居していてテストが届かない判断は、純粋関数に切り出してから書く。
+`ICMPPinger.sendWindow` / `EchoPinger.reportableRoundTrip`); UI and network I/O are
+not included. Only `CommandLineTool` is tested by actually creating links in a temporary folder.
+Anything inside `Network/` that does not touch sockets is a test target. Decisions that live
+alongside sockets or child processes, where tests cannot reach, should be extracted into pure
+functions before they are written.
 
 ```shell
 swift test
 ```
 
-これはリリースビルドの門番でもある (`.github/workflows/release.yml` の test job)。
-テストを消す・落としたまま放置するとリリースが出せなくなる。
+This is also the gatekeeper for release builds (the test job in `.github/workflows/release.yml`).
+Deleting tests, or leaving them failing, makes it impossible to ship a release.
 
-UI やネットワークに触るコードを `swift test` から検証する手段は無い。手元で
-1 ファイルのロジックだけ試したい時は、対象のソースを直接 `swiftc` に渡して
-スクラッチのハーネスと一緒にコンパイルする方法も使える。
+There is no way to verify code that touches the UI or the network from `swift test`. When you
+want to try the logic of a single file locally, you can also pass the target sources directly to
+`swiftc` and compile them together with a scratch harness.
 
 ```shell
 swiftc -swift-version 6 -o /tmp/check \
   Sources/octetly/Network/IPv4.swift Sources/octetly/Network/ScanRange.swift \
-  <ハーネス>/main.swift
+  <harness>/main.swift
 ```
 
-バンドルされたリソースを参照するファイル (`grep -rn 'BundledResource' Sources/` で確認) は
-この方法では通らない。その関数だけ除いたコピーを作るか、対象から外す。
+Files that reference bundled resources (check with `grep -rn 'BundledResource' Sources/`) do
+not compile this way. Make a copy with just that function removed, or leave the file out.
 
-ソース全体の型検査だけなら、`Bundle.module` のスタブを足して `-typecheck` に渡せばサンドボックス内でも
-通る。モジュールキャッシュは既定の場所に書けないので指定する。
+For type-checking the whole source tree only, adding a stub for `Bundle.module` and passing it to
+`-typecheck` works even inside the sandbox. The module cache cannot be written to its default
+location, so specify one.
 
 ```shell
 echo 'import Foundation; extension Bundle { static let module = Bundle.main }' > "$TMPDIR/stub.swift"
@@ -60,106 +62,114 @@ swiftc -typecheck -swift-version 6 -target arm64-apple-macosx14.0 -parse-as-libr
   $(find Sources/octetly -name '*.swift') "$TMPDIR/stub.swift"
 ```
 
-`@Observable` の展開だけは `swift-plugin-server` が sandbox-exec を入れ子にできず落ちる。
-それに連なる 3 種の error は無視してよい: `external macro implementation type ... could not be found`、
-その型を `@State` / `@Bindable` で包む箇所の `The wrapped value must be an object that conforms to
-Observable`、`couldn't create cache file ... xcrun_db`。それ以外の error が 0 なら通っている。
+Only the expansion of `@Observable` fails, because `swift-plugin-server` cannot nest sandbox-exec.
+The three kinds of error that follow from it can be ignored: `external macro implementation type ... could not be found`,
+`The wrapped value must be an object that conforms to Observable` at places that wrap that type in
+`@State` / `@Bindable`, and `couldn't create cache file ... xcrun_db`. If there are 0 errors other
+than those, it passes.
 
-### 画面の確認
+### Checking the UI
 
-レイアウトや選択のような UI の挙動は、実行中のアプリから数値で取る。`ContentView` に
-環境変数で有効になる一時的な `.task` を足し、`scanner.scan()` → 数秒待つ → `NSApp.windows` から
-`NSTableView` を探して `rect(ofRow:)` やビュー階層の frame を `NSLog` で出す。コピーボタンの
-ホバー状態は `copier.pointer(isInside:_:)` を直接呼べば再現できる (Name 列の鉛筆はセル内の
-`@State` なので出ない)。**検証する条件が実際に成立している行で測ること**
-(コピーボタンの検証なら名前やアドレスのある行)。条件が成立しない行で測ると、差が出ないまま通ってしまう。
+Measure UI behaviour such as layout and selection numerically from the running app. Add a
+temporary `.task` to `ContentView` that is enabled by an environment variable, run `scanner.scan()` →
+wait a few seconds → find the `NSTableView` in `NSApp.windows`, and `NSLog` `rect(ofRow:)` or the
+frames of the view hierarchy. The hover state of the copy button can be reproduced by calling
+`copier.pointer(isInside:_:)` directly (the pencil in the Name column is `@State` inside the cell, so
+it does not appear). **Measure on rows where the condition you are verifying actually holds**
+(for the copy button, rows that have a name or address). Measuring on rows where the condition does
+not hold lets the check pass without showing any difference.
 
-スクリーンショットは同じ `.task` の中で窓ごとに `cacheDisplay(in:to:)` して PNG に書く。シートも
-別の窓として取れる。`screencapture -l <窓番号>` はシート表示中に失敗し、引数なしの
-`screencapture` に倒すと他のアプリまで写るので使わない。
+For screenshots, call `cacheDisplay(in:to:)` per window inside the same `.task` and write PNGs. Sheets
+can also be captured as separate windows. Do not use `screencapture -l <window number>`, which fails
+while a sheet is shown, nor fall back to `screencapture` without arguments, which also captures other apps.
 
-`swift run` の `@AppStorage` はドメイン `Octetly` (`defaults read Octetly`) に書かれる。ユーザーが
-`swift run` で使っているアプリと同じ設定なので、検証で変えた値は戻すこと (配布版の .app は
-`com.cyberneura.octetly` で別)。デバッグ用の `.task` はコミット前に消す。
+`@AppStorage` under `swift run` is written to the domain `Octetly` (`defaults read Octetly`). These are
+the same settings as the app the user runs with `swift run`, so restore any values you changed while
+verifying (the distributed .app uses `com.cyberneura.octetly`, which is separate). Remove the debug
+`.task` before committing.
 
-### 計測の A/B
+### A/B measurements
 
-ネットワークの計測を A/B する時は**実行の間に冷却を挟む**。掃引を連続で走らせると
-経路側にスロットルされ、条件と無関係に検出数が変動して比較が成立しない。判定は
-`ping` の並列掃引との同時刻比較で行う。
+When A/B testing network measurements, **insert a cool-down between runs**. Running sweeps back to back
+gets them throttled along the path, and the detection count fluctuates independently of the
+conditions, so the comparison is meaningless. Judge by comparing against a parallel `ping` sweep run
+at the same time.
 
-## 配布物
+## Distribution
 
-`swift run` / `swift build` が作るのは .app バンドルではない。配布する .app は
-`scripts/make-app.sh` が組み立てる (universal バイナリ + リソース + サイズ別の icon.icns / Assets.car + `packaging/Info.plist`)。dmg は `scripts/make-dmg.sh`。署名と公証は
-`.github/workflows/release.yml` が行い、手元では署名なしの .app ができる。
+What `swift run` / `swift build` produce is not a .app bundle. The distributed .app is assembled by
+`scripts/make-app.sh` (universal binary + resources + size-specific icon.icns / Assets.car + `packaging/Info.plist`). The dmg is made by `scripts/make-dmg.sh`. Signing and notarization are done by
+`.github/workflows/release.yml`; locally you get an unsigned .app.
 
-version の出どころは**リポジトリ直下の `VERSION` ファイル 1 つ**。`Info.plist` の
-`CFBundleShortVersionString` は make-app.sh がここから埋める。
+The version comes from **one source: the `VERSION` file at the repository root**. make-app.sh fills
+`CFBundleShortVersionString` in `Info.plist` from it.
 
-### リソースの参照は `BundledResource` を通す
+### Reference resources through `BundledResource`
 
-**`Bundle.module` を直接呼ばないこと。** SwiftPM が生成するアクセサは、リソース
-バンドルを `Bundle.main.bundleURL` の直下 (= `Octetly.app/` の直下) に探しに行く。
-.app の最上位には `Contents` 以外を置けない (置くと署名が壊れる) ので、バンドル版では
-そこに置きようがない。**見つからない時は nil ではなく `fatalError` なので、素朴に
-書くと配布版が起動時に落ちる。**
+**Do not call `Bundle.module` directly.** The accessor SwiftPM generates looks for the resource
+bundle directly under `Bundle.main.bundleURL` (= directly under `Octetly.app/`).
+Nothing other than `Contents` can be placed at the top level of a .app (doing so breaks the
+signature), so in the bundled build there is no way to put it there. **When it is not found the
+accessor calls `fatalError` rather than returning nil, so naive code makes the distributed build
+crash on launch.**
 
-そのため make-app.sh はリソースバンドルの中身を `Contents/Resources` に展開し、
-`BundledResource.url(forResource:withExtension:)` が .app (`BundledResource.app`、通常は
-`Bundle.main`) を先に、`Bundle.module` を後に見る。`swift run` では前者が空振りして後者が当たる。
+For that reason make-app.sh expands the contents of the resource bundle into `Contents/Resources`,
+and `BundledResource.url(forResource:withExtension:)` looks in the .app (`BundledResource.app`,
+normally `Bundle.main`) first and in `Bundle.module` second. Under `swift run` the former misses and
+the latter hits.
 
-**バンドル版と `swift run` で挙動が変わる**箇所は他にもある
-(`OctetlyApp.swift` の `applyDockIcon` は Info.plist の有無で分岐する)。
-片方でしか確認しない変更を入れないこと。
+There are other places where **behaviour differs between the bundled build and `swift run`**
+(`applyDockIcon` in `OctetlyApp.swift` branches on whether there is an Info.plist).
+Do not land changes that have been checked in only one of them.
 
-起動形態はもう 1 つある。**Install Command-Line Tool… が作る `/usr/local/bin/octetly`
-(シンボリックリンク) 経由**では、`Bundle.main` がリンクのあるフォルダになり、Info.plist も
-リソースも無い。.app の中身を読む時は `BundledResource.app` (リンクを解決した .app) を使う。
-確認は `scripts/make-app.sh` で作った .app にリンクを張って `version` / `--license` を叩く。
+There is one more launch mode. **Via `/usr/local/bin/octetly` (a symbolic link) created by
+Install Command-Line Tool…**, `Bundle.main` becomes the folder containing the link, and there is
+neither an Info.plist nor resources. When reading the contents of the .app, use `BundledResource.app`
+(the .app with the link resolved). To check, create a link to a .app built by `scripts/make-app.sh`
+and run `version` / `--license` through it.
 
-## コマンドライン
+## Command line
 
-実行ファイルは 1 つで、`OctetlyMain` (`@main`) が引数を見て GUI と CLI を振り分ける
-(`octetly lookup` / `octetly search`)。**`CLICommand.parse` は未知の引数に nil を返して
-GUI を開く。** macOS や Xcode が付ける `-psn_…` / `-NSDocumentRevisionsDebugMode` で
-起動がエラーにならないようにするためで、「不明な引数はエラー」に変えないこと。
-パーサは `CLICommandTests` で検査している。
+There is a single executable; `OctetlyMain` (`@main`) inspects the arguments and dispatches to the
+GUI or the CLI (`octetly lookup` / `octetly search`). **`CLICommand.parse` returns nil for unknown
+arguments and opens the GUI.** This is so that launches with `-psn_…` / `-NSDocumentRevisionsDebugMode`,
+which macOS and Xcode add, do not fail; do not change it to "unknown arguments are an error".
+The parser is tested by `CLICommandTests`.
 
-## 生成データ
+## Generated data
 
-`Sources/octetly/Resources/oui.csv` は IEEE の 3 レジストリを統合した生成物
-(5.4 万行)。手で編集しない。更新は:
+`Sources/octetly/Resources/oui.csv` is generated by merging IEEE's three registries
+(54k lines). Do not edit it by hand. To update it:
 
 ```shell
 python3 scripts/update-oui.py
 ```
 
-レビューやコードリーディングでは対象から外すこと。
+Exclude it from reviews and code reading.
 
-## ライセンス表示
+## License notices
 
-`LICENSE` (MIT) と `THIRD-PARTY-NOTICES.txt` はリポジトリ直下にあり、アプリはその
-コピー (`Sources/octetly/Resources/LICENSE.txt` / `THIRD-PARTY-NOTICES.txt`) を
-リソースとして持つ。アプリメニューの About 直下の **Third-Party Licenses…** と
-`octetly --license` がこれを表示する (`Licenses.swift`)。
+`LICENSE` (MIT) and `THIRD-PARTY-NOTICES.txt` are at the repository root, and the app carries
+copies of them (`Sources/octetly/Resources/LICENSE.txt` / `THIRD-PARTY-NOTICES.txt`) as
+resources. **Third-Party Licenses…** directly under About in the app menu and
+`octetly --license` display them (`Licenses.swift`).
 
-**どれも手で編集しない。** `Package.swift` に依存を足した時や `LICENSE` を変えた時は
-次を流し直して、生成された 3 ファイルをコミットする。
+**Do not edit any of them by hand.** When you add a dependency to `Package.swift` or change
+`LICENSE`, rerun the following and commit the three generated files.
 
 ```shell
 scripts/generate-third-party-notices.sh
 ```
 
-今は依存が無いので「同梱しているライブラリは無い」という定型文を書くだけで、
-`.package(...)` が現れるとエラーで止まる。依存を足す時はスクリプトを拡張して
-`Package.resolved` の pin と `.build/checkouts/*/LICENSE*` の本文を載せること
-(resolve は macOS でしかできない)。古いまま放置すると release.yml の test job
-(`--check`) と `LicenseTests` が落ちる。
+There are no dependencies right now, so it only writes the boilerplate "no bundled libraries", and
+it stops with an error when a `.package(...)` appears. When adding a dependency, extend the script to
+include the pins from `Package.resolved` and the text of `.build/checkouts/*/LICENSE*`
+(resolving only works on macOS). Leaving the files stale makes the release.yml test job
+(`--check`) and `LicenseTests` fail.
 
-## 課題管理
+## Issue tracking
 
-`_issues/<YYYYMMDD>-<概要>/ISSUE.md`。`.gitignore` に入れてあるのでコミットされない。
+`_issues/<YYYYMMDD>-<summary>/ISSUE.md`. It is listed in `.gitignore`, so it is not committed.
 
 ## macOS app icon
 
